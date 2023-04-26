@@ -11,7 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import time
 from sklearn.metrics.pairwise import cosine_similarity
-import tensorflow_hub as hub
+#import tensorflow_hub as hub
 
 
 use_module_url = "https://tfhub.dev/google/universal-sentence-encoder-large/5"
@@ -42,8 +42,8 @@ class CFEVERERTrainDataset(Dataset):
                                                               padding='max_length', truncation=True,
                                                               max_length=self.max_len, return_token_type_ids=True)
         
-        seq, attn_masks, segment_ids = claim_evidence_in_tokens['input_ids'], claim_evidence_in_tokens[
-                'attention_mask'], claim_evidence_in_tokens['token_type_ids']
+        seq, attn_masks, segment_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
+                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
     
         return seq, attn_masks, segment_ids, label
 
@@ -312,16 +312,16 @@ def test_h():
 if __name__ == '__main__':
     random.seed(42)
 
-    train_path = './project-data/train-claims.json'
-    dev_path = './project-data/dev-claims.json'
-    test_path = './project-data/test-claims-unlabelled.json'
-    evidence_path = './project-data/evidence.json'
+    train_path = '../project-data/train-claims.json'
+    dev_path = '../project-data/dev-claims.json'
+    test_path = '../project-data/test-claims-unlabelled.json'
+    evidence_path = '../project-data/evidence.json'
 
     train_claims, dev_claims, test_claims, evidences = load_data(train_path, dev_path, test_path, evidence_path)
 
     # Load the Universal Sentence Encoder
 
-    use_model = hub.load(use_module_url)
+    #use_model = hub.load(use_module_url)
 
     test_h()
 
