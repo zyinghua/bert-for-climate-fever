@@ -1,4 +1,5 @@
 import json
+import math
 import pandas as pd
 import numpy as np
 import torch
@@ -6,7 +7,7 @@ import torch.nn as nn
 import random
 from transformers import BertTokenizer
 from transformers import BertModel
-from collections import Counter
+from collections import Counter, defaultdict
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import time
@@ -18,63 +19,40 @@ use_module_url = "https://tfhub.dev/google/universal-sentence-encoder-large/5"
 evidence_key_prefix = 'evidence-'
 d_bert_base = 768
 d_bert_large = 1024
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+max_evi = 5
 gpu = 0
+evidence_selection_threshold = 0.5
 
-
-class CFEVERERTrainDataset(Dataset):
+class CFEVERERDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Training, for the Evidence Retrival task."""
 
     def __init__(self, claims, evidences_, is_train, max_len=512):
-        self.train_set = unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1)
+        self.data_set = unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1)
         self.max_len = max_len
+        self.claims = claims
+        self.evidences = evidences_
+        self.is_train  = is_train
 
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     def __len__(self):
-        return len(self.train_set)
+        return len(self.data_set)
 
     def __getitem__(self, index):
-        train_claim_text, train_evidence, label = self.train_set[index]
+        if self.is_train:
+            claim_id, evidence_id, label = self.data_set[index]
+        else:
+            claim_id, evidence_id = self.data_set[index]
 
         # Preprocessing the text to be suitable for BERT
-        claim_evidence_in_tokens = self.tokenizer.encode_plus(train_claim_text, train_evidence, return_tensors='pt',
-                                                              padding='max_length', truncation=True,
+        claim_evidence_in_tokens = self.tokenizer.encode_plus(self.claims[claim_id]['claim_text'], self.evidences[evidence_id], 
+                                                              return_tensors='pt', padding='max_length', truncation=True,
                                                               max_length=self.max_len, return_token_type_ids=True)
         
         seq, attn_masks, segment_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
                 'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
     
-        return seq, attn_masks, segment_ids, label
-
-
-class CFEVERERTestDataset(Dataset):
-    """Climate Fact Extraction and Verification Dataset for Testing, for the Evidence Retrival task."""
-
-    def __init__(self, claims, evidence_, max_len=512):
-
-        self.evidence_candidates = evidence_  # In the form of (evidence_id, evidence_text)
-        self.max_len = max_len 
-        self.claims = claims
-
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, index):
-        claim_text = self.df.loc[self.df.index[index], 'claim_text']
-        claim_evidences = self.df.loc[self.df.index[index], 'evidences']
-
-        labels = [1 if id in claim_evidences else 0 for id, test_evidence in self.evidence_candidates]
-
-        # Preprocessing the text to be suitable for BERT
-        claim_evidences_in_tokens = [self.tokenizer.encode_plus(claim_text, test_evidence, return_tensors='pt',
-                                                                padding='max_length', truncation=True,
-                                                                max_length=self.max_len, return_token_type_ids=True)
-                                     for id, test_evidence in self.evidence_candidates]
-
-        return claim_evidences_in_tokens, labels
+        return seq, attn_masks, segment_ids, label if self.is_train else seq, attn_masks, segment_ids, claim_id, evidence_id
 
 
 def generate_train_evidence_samples(full_evidences, claim_evidences, sample_ratio):
@@ -87,27 +65,19 @@ def generate_train_evidence_samples(full_evidences, claim_evidences, sample_rati
     """
 
     # Get positive samples
-    samples = []
-    for claim_evidence in claim_evidences:
-        samples.append(full_evidences[claim_evidence])
+    samples = claim_evidences
 
     # Get negative samples
-    samples += random.sample([full_evidences[evidence_key_prefix + str(i)] for i in range(len(full_evidences))
+    samples += random.sample([evidence_key_prefix + str(i) for i in range(len(full_evidences))
                               if evidence_key_prefix + str(i) not in claim_evidences],
                              len(claim_evidences) * sample_ratio)  # random selection
 
-    samples_with_labels = list(zip(samples, [1 if i < len(claim_evidences) else 0 for i in range(len(samples))]))
+    samples_with_labels = list(zip(samples, [1] * len(claim_evidences) + [0] * (len(samples) - len(claim_evidences))))
 
     return samples_with_labels
 
 
-def generate_dev_evidence_samples(full_evidences, claim_evidences):
-    samples = list(full_evidences.items())
-
-    return [(s[1], 1 if s[0] in claim_evidences else 0) for s in samples]
-
-
-def generate_test_evidence_samples(full_evidences, max_candidates=500):
+def generate_test_evidence_samples(full_evidences, claim_text, max_candidates=1000):
     """
     Generate test samples for each of the claims for the evidence retrieval task.
     :param full_evidences: the full evidence set.
@@ -115,7 +85,7 @@ def generate_test_evidence_samples(full_evidences, max_candidates=500):
     """
 
     # Get negative samples
-    samples = full_evidences
+    samples = np.array(list(full_evidences.items()))[:, 0]
 
     return samples
 
@@ -137,19 +107,21 @@ def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1):
     if is_train:
         train_claim_evidence_pairs = []
         for claim in claims:
-            for train_evidence, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'],
-                                                                        sample_ratio):
-                train_claim_evidence_pairs.append((claims[claim]['claim_text'], train_evidence, label))
+            for train_evidence_id, label in generate_train_evidence_samples(evidences_, 
+                                                    claims[claim]['evidences'], sample_ratio):
+                train_claim_evidence_pairs.append((claim, train_evidence_id, label))
 
         random.shuffle(train_claim_evidence_pairs)
         print(f"Finished unrolling train claim-evidence pairs in {time.time() - st} seconds.")
 
         return train_claim_evidence_pairs
     else:
+        # Load the Universal Sentence Encoder
+        #use_model = hub.load(use_module_url)
         test_claim_evidence_pairs = []
         for claim in claims:
-            for train_evidence, label in generate_dev_evidence_samples(evidences_, claims[claim]['evidences']):
-                test_claim_evidence_pairs.append((claims[claim]['claim_text'], train_evidence, label))
+            for test_evidence_id in generate_test_evidence_samples(evidences_, claims[claim]['claim_text']):
+                test_claim_evidence_pairs.append((claim, test_evidence_id))
 
         print(f"Finished unrolling test claim-evidence pairs in {time.time() - st} seconds.")
 
@@ -165,7 +137,7 @@ class CFEVERERClassifier(nn.Module):
         self.bert = BertModel.from_pretrained('bert-base-uncased')
 
         # Classification layer
-        # input dimension is 768 because [CLS] embedding has a dimension of 768
+        # input dimension is 768 because [CLS] embedding has a dimension of 768, if bert base is used
         # output dimension is 1 because we're working with a binary classification problem - RELEVANT : NOT RELEVANT
         self.cls_layer = nn.Linear(d_bert_base, 1)
 
@@ -190,18 +162,19 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, max_eps, gpu):
+def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, max_eps, dev_claims, gpu):
     best_acc = 0
     st = time.time()
 
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
+
         for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
             # Reset/Clear gradients
             opti.zero_grad()
 
             # Extracting the tokens ids, attention masks and token type ids
-            seq, attn_masks, segment_ids, labels = seq.to(device), attn_masks.to(device), segment_ids.to(device), labels.to(device)
+            seq, attn_masks, segment_ids, labels = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), labels.cuda(gpu)
 
             # Obtaining the logits from the model
             logits = net(seq, attn_masks, segment_ids)
@@ -215,17 +188,17 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, max_
             # Optimization step, apply the gradients
             opti.step()
 
-        if i % 100 == 0:
-            acc = get_accuracy_from_logits(logits, labels)
-            print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep,loss.item(), acc, (time.time() - st)))
-            st = time.time()
+            if i % 100 == 0:
+                acc = get_accuracy_from_logits(logits, labels)
+                print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
+                st = time.time()
 
-    dev_acc, dev_loss = evaluate(net, loss_criterion, dev_loader, gpu)
-    print("Epoch {} complete! Development Accuracy: {}; Development Loss: {}".format(ep, dev_acc, dev_loss))
-    if dev_acc > best_acc:
-        print("Best development accuracy improved from {} to {}, saving model...".format(best_acc, dev_acc))
-        best_acc = dev_acc
-        torch.save(net.state_dict(), 'cfeverercls_{}.dat'.format(ep))
+        dev_acc, dev_loss = evaluate(net, loss_criterion, dev_loader, gpu)
+        print("Epoch {} complete! Development Accuracy: {}; Development Loss: {}".format(ep, dev_acc, dev_loss))
+        if dev_acc > best_acc:
+            print("Best development accuracy improved from {} to {}, saving model...".format(best_acc, dev_acc))
+            best_acc = dev_acc
+            torch.save(net.state_dict(), 'cfeverercls_{}.dat'.format(ep))
 
 
 def get_accuracy_from_logits(logits, labels):
@@ -235,8 +208,44 @@ def get_accuracy_from_logits(logits, labels):
     return acc
 
 
-def evaluate(net, loss_criterion, dataloader, gpu):
+def get_probs_from_logits(logits, threshold=0.5):
+    probs = torch.sigmoid(logits.unsqueeze(-1))
+
+    return probs
+
+
+def reselect_candidates(existing_candidates, new_candidate):
+    return sorted(existing_candidates + [new_candidate], key=lambda x: x[0], reverse=True)[:max_evi]
+
+
+def evaluate(net, loss_criterion, dataloader, dev_claims, gpu):
     net.eval()
+
+    # claim_evidences = defaultdict(lambda: [(-math.inf, None)] * max_evi)
+    # recall, precision = 0.0, 0.0
+
+    # with torch.no_grad():  # suspend grad track, save time and memory
+    #     for seq, attn_masks, segment_ids, claim_ids, evidence_ids in dataloader:
+    #         seq, attn_masks, segment_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu)
+    #         logits = net(seq, attn_masks, segment_ids)
+    #         probs = get_probs_from_logits(logits)
+            
+    #         for i, prob in enumerate(probs):
+    #             claim_evidences[claim_ids[i]] = reselect_candidates(claim_evidences[claim_ids[i]], (prob.item(), evidence_ids[i]))  
+    
+
+    # for claim_id in claim_evidences.keys():
+    #     claim_evidences[claim_id] = [evidence[1] for evidence in claim_evidences[claim_id] if evidence[0] > evidence_selection_threshold]
+
+    # for claim_id, evidences in claim_evidences.items():
+    #     e_true = dev_claims[claim_id]['evidences']
+    #     recall += len(set(e_true).intersection(set(evidences))) / len(e_true)
+    #     precision += len(set(e_true).intersection(set(evidences))) / len(evidences)
+
+    # recall /= len(claim_evidences)
+    # precision /= len(claim_evidences)
+
+    # return 2 * (precision * recall) / (precision + recall)  # F1 Score
 
     mean_acc, mean_loss = 0, 0
     count = 0
@@ -282,9 +291,12 @@ def test_h():
     label_counter = Counter()
     evidence_num_counter = Counter()
     evidence_len_counter = Counter()
+    biggest_claim = (0, "")
     biggest = (0, "", "")
     count = 0
     for claim in train_claims:
+        biggest_claim = max([biggest_claim, (len(train_claims[claim]['claim_text'].split()), train_claims[claim]['claim_text'])],
+                            key=lambda x: x[0])
         label_counter.update([train_claims[claim]['claim_label']])
         evidence_num_counter.update([len(train_claims[claim]['evidences'])])
         for e in train_claims[claim]['evidences']:
@@ -307,6 +319,8 @@ def test_h():
         f'Label Counter: {label_counter}, Len Counter:{evidence_num_counter}, Count: {count}, total: {len(train_claims)}, percentage: {count / len(train_claims)}')
     print("\n\n")
     print("Biggest evidence: ", biggest)
+    print("\n\n")
+    print("Biggest claim: ", biggest_claim)
 
 
 if __name__ == '__main__':
@@ -319,29 +333,23 @@ if __name__ == '__main__':
 
     train_claims, dev_claims, test_claims, evidences = load_data(train_path, dev_path, test_path, evidence_path)
 
-    # Load the Universal Sentence Encoder
+    # Creating instances of training and development set
+    # max_len sets the maximum length that a sentence can have,
+    # any sentence longer than that length is truncated to the max_len size
+    train_set = CFEVERERDataset(train_claims, evidences, True)
+    # dev_set = CFEVERERDataset(train_claims, evidences, False)
 
-    #use_model = hub.load(use_module_url)
+    # Creating intsances of training and development dataloaders
+    train_loader = DataLoader(train_set, batch_size=64, num_workers=2)
+    # dev_loader = DataLoader(dev_set, batch_size = 64, num_workers = 2)
 
-    test_h()
+    net = CFEVERERClassifier()
+    net.cuda(gpu) #Enable gpu support for the model
 
-    # # Creating instances of training and development set
-    # # max_len sets the maximum length that a sentence can have,
-    # # any sentence longer than that length is truncated to the max_len size
-    # train_set = CFEVERERTrainDataset(train_claims, evidences, True)
-    # # dev_set = CFEVERERTestDataset(train_claims, evidences, has_labels=True)
+    loss_criterion = nn.BCEWithLogitsLoss()
+    opti = optim.Adam(net.parameters(), lr=2e-5)
 
-    # # #Creating intsances of training and development dataloaders
-    # train_loader = DataLoader(train_set, batch_size=64, num_workers=4)
-    # # dev_loader = DataLoader(dev_set, batch_size = 64, num_workers = 4)
+    num_epoch = 1
 
-    # net = CFEVERERClassifier()
-    # # net.cuda(gpu) #Enable gpu support for the model
-
-    # loss_criterion = nn.BCEWithLogitsLoss()
-    # opti = optim.Adam(net.parameters(), lr=2e-5)
-
-    # num_epoch = 1
-
-    # # fine-tune the model
-    # train_evi_retrival(net, loss_criterion, opti, train_loader, None, num_epoch, gpu)
+    # fine-tune the model
+    train_evi_retrival(net, loss_criterion, opti, train_loader, None, num_epoch, dev_claims, gpu)
