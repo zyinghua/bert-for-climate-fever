@@ -56,7 +56,7 @@ class CFEVERERDataset(Dataset):
         return (seq, attn_masks, segment_ids, label) if self.is_train else (seq, attn_masks, segment_ids, claim_id, evidence_id)
 
 
-def generate_train_evidence_samples(full_evidences_len, claim_evidences, sample_ratio):
+def generate_train_evidence_samples(full_evidences, claim_evidences, sample_ratio):
     """
     Generate training samples for each of the claims for the evidence retrieval task.
     :param full_evidences: the full evidence set.
@@ -66,12 +66,14 @@ def generate_train_evidence_samples(full_evidences_len, claim_evidences, sample_
     """
 
     # Get positive samples
-    samples = claim_evidences  # evidence ids
+    samples = claim_evidences.copy()  # evidence ids
 
     # Get negative samples
-    samples += random.sample([evidence_key_prefix + str(i) for i in range(full_evidences_len)
-                              if evidence_key_prefix + str(i) not in claim_evidences],
-                             len(claim_evidences) * sample_ratio)  # random selection
+    while len(samples) < len(claim_evidences) * (sample_ratio + 1):
+        neg_sample = evidence_key_prefix + str(random.randint(0, len(full_evidences) - 1))  # random selection
+        
+        if neg_sample not in samples:
+            samples.append(neg_sample)
 
     samples_with_labels = list(zip(samples, [1] * len(claim_evidences) + [0] * (len(samples) - len(claim_evidences))))
 
@@ -85,7 +87,6 @@ def generate_test_evidence_candidates(full_evidences, claim_text, max_candidates
     :return: a list of evidence samples.
     """
 
-    # Get negative samples
     samples = list(full_evidences.keys())  # np.array(list(full_evidences.items()))[:, 0]
 
     return samples
@@ -94,10 +95,9 @@ def generate_test_evidence_candidates(full_evidences, claim_text, max_candidates
 def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1):
     st = time.time()
     if is_train:
-        full_evidences_len = len(evidences_)
         train_claim_evidence_pairs = []
         for claim in claims:
-            for train_evidence_id, label in generate_train_evidence_samples(full_evidences_len,
+            for train_evidence_id, label in generate_train_evidence_samples(evidences_,
                                                     claims[claim]['evidences'], sample_ratio):
                 train_claim_evidence_pairs.append((claim, train_evidence_id, label))
 
@@ -327,11 +327,11 @@ if __name__ == '__main__':
     # max_len sets the maximum length that a sentence can have,
     # any sentence longer than that length is truncated to the max_len size
     train_set = CFEVERERDataset(train_claims, evidences, True)
-    # dev_set = CFEVERERDataset(train_claims, evidences, False)
+    dev_set = CFEVERERDataset(dev_claims, evidences, False)
 
     # Creating intsances of training and development dataloaders
     train_loader = DataLoader(train_set, batch_size=24, num_workers=2)
-    # dev_loader = DataLoader(dev_set, batch_size=24, num_workers = 2)
+    dev_loader = DataLoader(dev_set, batch_size=24, num_workers = 2)
 
     net = CFEVERERClassifier()
     net.cuda(gpu) #Enable gpu support for the model
