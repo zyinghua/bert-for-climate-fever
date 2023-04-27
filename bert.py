@@ -22,11 +22,12 @@ d_bert_large = 1024
 max_evi = 5
 gpu = 0
 evidence_selection_threshold = 0.5
+input_seq_max_len = 384
 
 class CFEVERERDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Training, for the Evidence Retrival task."""
 
-    def __init__(self, claims, evidences_, is_train, max_len=512):
+    def __init__(self, claims, evidences_, is_train, max_len=input_seq_max_len):
         self.data_set = unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1)
         self.max_len = max_len
         self.claims = claims
@@ -52,10 +53,10 @@ class CFEVERERDataset(Dataset):
         seq, attn_masks, segment_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
                 'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
     
-        return seq, attn_masks, segment_ids, label if self.is_train else seq, attn_masks, segment_ids, claim_id, evidence_id
+        return (seq, attn_masks, segment_ids, label) if self.is_train else (seq, attn_masks, segment_ids, claim_id, evidence_id)
 
 
-def generate_train_evidence_samples(full_evidences, claim_evidences, sample_ratio):
+def generate_train_evidence_samples(full_evidences_len, claim_evidences, sample_ratio):
     """
     Generate training samples for each of the claims for the evidence retrieval task.
     :param full_evidences: the full evidence set.
@@ -65,10 +66,10 @@ def generate_train_evidence_samples(full_evidences, claim_evidences, sample_rati
     """
 
     # Get positive samples
-    samples = claim_evidences
+    samples = claim_evidences  # evidence ids
 
     # Get negative samples
-    samples += random.sample([evidence_key_prefix + str(i) for i in range(len(full_evidences))
+    samples += random.sample([evidence_key_prefix + str(i) for i in range(full_evidences_len)
                               if evidence_key_prefix + str(i) not in claim_evidences],
                              len(claim_evidences) * sample_ratio)  # random selection
 
@@ -77,7 +78,7 @@ def generate_train_evidence_samples(full_evidences, claim_evidences, sample_rati
     return samples_with_labels
 
 
-def generate_test_evidence_samples(full_evidences, claim_text, max_candidates=1000):
+def generate_test_evidence_candidates(full_evidences, claim_text, max_candidates=1000):
     """
     Generate test samples for each of the claims for the evidence retrieval task.
     :param full_evidences: the full evidence set.
@@ -85,29 +86,18 @@ def generate_test_evidence_samples(full_evidences, claim_text, max_candidates=10
     """
 
     # Get negative samples
-    samples = np.array(list(full_evidences.items()))[:, 0]
+    samples = list(full_evidences.keys())  # np.array(list(full_evidences.items()))[:, 0]
 
     return samples
 
 
 def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1):
-    """Reduce size of evidences for computational efficiency."""
-    """------------------------------------------------------"""
-    # pos_neg_pool_ratio = 1
-    # par_evidences = []
-
-    # for claim in train_claims:
-    #     par_evidences += train_claims[claim]['evidences']
-
-    # unum_pos = len(set(par_evidences))
-    # par_evidences += [evidence_key_prefix + str(i) for i in random.sample(range(len(evidences_)), unum_pos * pos_neg_pool_ratio)]
-    # evidences_ = {e: evidences_[e] for e in set(par_evidences)}
-    """------------------------------------------------------"""
     st = time.time()
     if is_train:
+        full_evidences_len = len(evidences_)
         train_claim_evidence_pairs = []
         for claim in claims:
-            for train_evidence_id, label in generate_train_evidence_samples(evidences_, 
+            for train_evidence_id, label in generate_train_evidence_samples(full_evidences_len,
                                                     claims[claim]['evidences'], sample_ratio):
                 train_claim_evidence_pairs.append((claim, train_evidence_id, label))
 
@@ -120,7 +110,7 @@ def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1):
         #use_model = hub.load(use_module_url)
         test_claim_evidence_pairs = []
         for claim in claims:
-            for test_evidence_id in generate_test_evidence_samples(evidences_, claims[claim]['claim_text']):
+            for test_evidence_id in generate_test_evidence_candidates(evidences_, claims[claim]['claim_text']):
                 test_claim_evidence_pairs.append((claim, test_evidence_id))
 
         print(f"Finished unrolling test claim-evidence pairs in {time.time() - st} seconds.")
@@ -211,7 +201,7 @@ def get_accuracy_from_logits(logits, labels):
 def get_probs_from_logits(logits, threshold=0.5):
     probs = torch.sigmoid(logits.unsqueeze(-1))
 
-    return probs
+    return probs.squeeze()
 
 
 def reselect_candidates(existing_candidates, new_candidate):
@@ -340,8 +330,8 @@ if __name__ == '__main__':
     # dev_set = CFEVERERDataset(train_claims, evidences, False)
 
     # Creating intsances of training and development dataloaders
-    train_loader = DataLoader(train_set, batch_size=64, num_workers=2)
-    # dev_loader = DataLoader(dev_set, batch_size = 64, num_workers = 2)
+    train_loader = DataLoader(train_set, batch_size=24, num_workers=2)
+    # dev_loader = DataLoader(dev_set, batch_size=24, num_workers = 2)
 
     net = CFEVERERClassifier()
     net.cuda(gpu) #Enable gpu support for the model
