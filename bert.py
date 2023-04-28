@@ -229,7 +229,7 @@ def predict(net, dataloader, gpu, threshold=evidence_selection_threshold):
     net.eval()
 
     claim_evidences = defaultdict(lambda: [(-math.inf, None)] * max_evi)
-    recall, precision = 0.0, 0.0
+
 
     with torch.no_grad():  # suspend grad track, save time and memory
         for seq, attn_masks, segment_ids, position_ids, claim_ids, evidence_ids in dataloader:
@@ -261,6 +261,7 @@ def predict(net, dataloader, gpu, threshold=evidence_selection_threshold):
 
 def evaluate(net, dataloader, dev_claims, gpu):
     claim_evidences = predict(net, dataloader, gpu)
+    recall, precision = 0.0, 0.0
 
     for claim_id, evidences in claim_evidences.items():
         e_true = dev_claims[claim_id]['evidences']
