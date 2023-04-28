@@ -11,11 +11,9 @@ from collections import Counter, defaultdict
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import time
-from sklearn.metrics.pairwise import cosine_similarity
-#import tensorflow_hub as hub
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 
-use_module_url = "https://tfhub.dev/google/universal-sentence-encoder-large/5"
 evidence_key_prefix = 'evidence-'
 d_bert_base = 768
 d_bert_large = 1024
@@ -23,6 +21,7 @@ max_evi = 5
 gpu = 0
 evidence_selection_threshold = 0.5
 input_seq_max_len = 384
+
 
 class CFEVERERDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Training, for the Evidence Retrival task."""
@@ -80,16 +79,12 @@ def generate_train_evidence_samples(full_evidences, claim_evidences, sample_rati
     return samples_with_labels
 
 
-def generate_test_evidence_candidates(full_evidences, claim_text, max_candidates=1000):
-    """
-    Generate test samples for each of the claims for the evidence retrieval task.
-    :param full_evidences: the full evidence set.
-    :return: a list of evidence samples.
-    """
+def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates=1000):
+    cosine_similarity = evidences_tfidf.dot(claim_tfidf.T).toarray().squeeze()
+    df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": cosine_similarity}).sort_values(by=['similarity'], ascending=False)
+    potential_relevant_evidences = df.iloc[:max_candidates]["evidences"].tolist()
 
-    samples = list(full_evidences.keys())  # np.array(list(full_evidences.items()))[:, 0]
-
-    return samples
+    return potential_relevant_evidences
 
 
 def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1):
@@ -106,11 +101,15 @@ def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1):
 
         return train_claim_evidence_pairs
     else:
-        # Load the Universal Sentence Encoder
-        #use_model = hub.load(use_module_url)
+        vectorizer = TfidfVectorizer(stop_words='english')
+        vectorizer.fit(list(evidences.values()) + [claims[c]["claim_text"] for c in claims])
+        evidences_tfidf = vectorizer.transform(evidences.values())
+
         test_claim_evidence_pairs = []
         for claim in claims:
-            for test_evidence_id in generate_test_evidence_candidates(evidences_, claims[claim]['claim_text']):
+            claim_tfidf = vectorizer.transform([claims[claim]['claim_text']])
+
+            for test_evidence_id in generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf):
                 test_claim_evidence_pairs.append((claim, test_evidence_id))
 
         print(f"Finished unrolling test claim-evidence pairs in {time.time() - st} seconds.")
@@ -153,12 +152,12 @@ class CFEVERERClassifier(nn.Module):
 
 
 def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, max_eps, dev_claims, gpu):
-    best_acc = 0
+    best_f1 = 0
     st = time.time()
 
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
-
+        
         for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
             # Reset/Clear gradients
             opti.zero_grad()
@@ -183,11 +182,11 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, max_
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
 
-        dev_acc, dev_loss = evaluate(net, loss_criterion, dev_loader, gpu)
-        print("Epoch {} complete! Development Accuracy: {}; Development Loss: {}".format(ep, dev_acc, dev_loss))
-        if dev_acc > best_acc:
-            print("Best development accuracy improved from {} to {}, saving model...".format(best_acc, dev_acc))
-            best_acc = dev_acc
+        f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
+        print("Epoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
+        if f1 > best_f1:
+            print("Best development f1 improved from {} to {}, saving model...".format(best_f1, f1))
+            best_f1 = f1
             torch.save(net.state_dict(), 'cfeverercls_{}.dat'.format(ep))
 
 
@@ -202,53 +201,52 @@ def get_probs_from_logits(logits, threshold=0.5):
     probs = torch.sigmoid(logits.unsqueeze(-1))
 
     return probs.squeeze()
-
-
-def reselect_candidates(existing_candidates, new_candidate):
-    return sorted(existing_candidates + [new_candidate], key=lambda x: x[0], reverse=True)[:max_evi]
-
-
-def evaluate(net, loss_criterion, dataloader, dev_claims, gpu):
-    net.eval()
-
-    # claim_evidences = defaultdict(lambda: [(-math.inf, None)] * max_evi)
-    # recall, precision = 0.0, 0.0
-
-    # with torch.no_grad():  # suspend grad track, save time and memory
-    #     for seq, attn_masks, segment_ids, claim_ids, evidence_ids in dataloader:
-    #         seq, attn_masks, segment_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu)
-    #         logits = net(seq, attn_masks, segment_ids)
-    #         probs = get_probs_from_logits(logits)
-            
-    #         for i, prob in enumerate(probs):
-    #             claim_evidences[claim_ids[i]] = reselect_candidates(claim_evidences[claim_ids[i]], (prob.item(), evidence_ids[i]))  
     
 
-    # for claim_id in claim_evidences.keys():
-    #     claim_evidences[claim_id] = [evidence[1] for evidence in claim_evidences[claim_id] if evidence[0] > evidence_selection_threshold]
+def reselect_candidates(existing_candidates, new_candidate, max_candidates=max_evi):
+    return sorted(existing_candidates + [new_candidate], key=lambda x: x[0], reverse=True)[:max_candidates]
 
-    # for claim_id, evidences in claim_evidences.items():
-    #     e_true = dev_claims[claim_id]['evidences']
-    #     recall += len(set(e_true).intersection(set(evidences))) / len(e_true)
-    #     precision += len(set(e_true).intersection(set(evidences))) / len(evidences)
 
-    # recall /= len(claim_evidences)
-    # precision /= len(claim_evidences)
+def evaluate(net, dataloader, dev_claims, gpu, threshold=0):
+    net.eval()
 
-    # return 2 * (precision * recall) / (precision + recall)  # F1 Score
-
-    mean_acc, mean_loss = 0, 0
-    count = 0
+    claim_evidences = defaultdict(lambda: [(-math.inf, None)] * max_evi)
+    recall, precision = 0.0, 0.0
 
     with torch.no_grad():  # suspend grad track, save time and memory
-        for seq, attn_masks, labels in dataloader:
-            seq, attn_masks, labels = seq.cuda(gpu), attn_masks.cuda(gpu), labels.cuda(gpu)
-            logits = net(seq, attn_masks)
-            mean_loss += loss_criterion(logits.squeeze(-1), labels.float()).item()
-            mean_acc += get_accuracy_from_logits(logits, labels)
-            count += 1
+        for seq, attn_masks, segment_ids, claim_ids, evidence_ids in dataloader:
+            seq, attn_masks, segment_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu)
+            logits = net(seq, attn_masks, segment_ids)
+            probs = get_probs_from_logits(logits)
+            
+            for i, prob in enumerate(probs):
+                claim_evidences[claim_ids[i]] = reselect_candidates(claim_evidences[claim_ids[i]], (prob.item(), evidence_ids[i]))  
 
-    return mean_acc / count, mean_loss / count
+    for claim_id in claim_evidences.keys():
+        selected_evidences = []
+
+        for e in claim_evidences[claim_id]:
+            if e[0] > threshold:
+                selected_evidences.append(e[1])
+
+        if len(selected_evidences) == 0:
+            top_e = max(claim_evidences[claim_id], key=lambda x:x[0])
+            selected_evidences = top_e[1]
+        
+        claim_evidences[claim_id] = selected_evidences
+
+    for claim_id, evidences in claim_evidences.items():
+        e_true = dev_claims[claim_id]['evidences']
+        recall += len([e for e in evidences if e in e_true])/ len(e_true)
+        precision += len([e for e in evidences if e in e_true]) / len(evidences)
+
+    recall /= len(claim_evidences)
+    precision /= len(claim_evidences)
+
+    if recall + precision == 0.0:
+        return 0.0, 0.0, 0.0
+    else:
+        return 2 * (precision * recall) / (precision + recall), recall, precision  # F1 Score
 
 
 def load_data(train_path, dev_path, test_path, evidence_path):
@@ -258,20 +256,6 @@ def load_data(train_path, dev_path, test_path, evidence_path):
     evidences = json.load(open(evidence_path))
 
     return train_claims, dev_claims, test_claims, evidences
-
-
-def get_use_embedding(model, sentence):
-    return model([sentence])[0]
-
-
-def get_similarity_score(claim, evidence, model):
-    sen1_emb = get_use_embedding(model, claim)
-    sen2_emb = get_use_embedding(model, evidence)
-
-    # Compute the cosine similarity between the vectors
-    cos_sim = cosine_similarity(np.array(list(sen1_emb)).reshape(1, -1), np.array(list(sen2_emb)).reshape(1, -1))[0][0]
-
-    return cos_sim
 
 
 def test_h():
@@ -342,4 +326,5 @@ if __name__ == '__main__':
     num_epoch = 1
 
     # fine-tune the model
-    train_evi_retrival(net, loss_criterion, opti, train_loader, None, num_epoch, dev_claims, gpu)
+    train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, num_epoch, dev_claims, gpu)
+
