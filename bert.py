@@ -12,22 +12,25 @@ from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import time
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 evidence_key_prefix = 'evidence-'
 d_bert_base = 768
 d_bert_large = 1024
-max_evi = 5
 gpu = 0
-evidence_selection_threshold = 0.5
 input_seq_max_len = 384
+train_sample_ratio = 2
+pre_select_evidence_num = 1000
+evidence_selection_threshold = 0.0
+max_evi = 5
 
 
 class CFEVERERDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Training, for the Evidence Retrival task."""
 
     def __init__(self, claims, evidences_, is_train, max_len=input_seq_max_len):
-        self.data_set = unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=1)
+        self.data_set = unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=train_sample_ratio)
         self.max_len = max_len
         self.claims = claims
         self.evidences = evidences_
@@ -79,9 +82,10 @@ def generate_train_evidence_samples(full_evidences, claim_evidences, sample_rati
     return samples_with_labels
 
 
-def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates=1000):
-    cosine_similarity = evidences_tfidf.dot(claim_tfidf.T).toarray().squeeze()
-    df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": cosine_similarity}).sort_values(by=['similarity'], ascending=False)
+def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates=pre_select_evidence_num):
+    similarity = cosine_similarity(claim_tfidf, evidences_tfidf).squeeze()
+    
+    df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": similarity}).sort_values(by=['similarity'], ascending=False)
     potential_relevant_evidences = df.iloc[:max_candidates]["evidences"].tolist()
 
     return potential_relevant_evidences
@@ -207,7 +211,7 @@ def reselect_candidates(existing_candidates, new_candidate, max_candidates=max_e
     return sorted(existing_candidates + [new_candidate], key=lambda x: x[0], reverse=True)[:max_candidates]
 
 
-def evaluate(net, dataloader, dev_claims, gpu, threshold=0):
+def evaluate(net, dataloader, dev_claims, gpu, threshold=evidence_selection_threshold):
     net.eval()
 
     claim_evidences = defaultdict(lambda: [(-math.inf, None)] * max_evi)
@@ -246,7 +250,7 @@ def evaluate(net, dataloader, dev_claims, gpu, threshold=0):
     if recall + precision == 0.0:
         return 0.0, 0.0, 0.0
     else:
-        return 2 * (precision * recall) / (precision + recall), recall, precision  # F1 Score
+        return 2 * (precision * recall) / (precision + recall), recall, precision  # F1 Score, recall, precision
 
 
 def load_data(train_path, dev_path, test_path, evidence_path):
@@ -314,8 +318,8 @@ if __name__ == '__main__':
     dev_set = CFEVERERDataset(dev_claims, evidences, False)
 
     # Creating intsances of training and development dataloaders
-    train_loader = DataLoader(train_set, batch_size=24, num_workers=2)
-    dev_loader = DataLoader(dev_set, batch_size=24, num_workers = 2)
+    train_loader = DataLoader(train_set, batch_size=32, num_workers=2)
+    dev_loader = DataLoader(dev_set, batch_size=32, num_workers = 2)
 
     net = CFEVERERClassifier()
     net.cuda(gpu) #Enable gpu support for the model
