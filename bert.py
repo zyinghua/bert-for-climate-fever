@@ -11,23 +11,28 @@ from collections import Counter, defaultdict
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import time
+import copy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from dataset_loader import load_data
 
-
+random.seed(42)
 evidence_key_prefix = 'evidence-'
+er_filename = "evidence-retrival-only-results.json"
+
+# ----------Hyperparameters of the entire pipeline----------
+# --------------Evidence Retrival--------------
 d_bert_base = 768
 d_bert_large = 1024
 gpu = 0
 input_seq_max_len = 384
-train_sample_ratio = 3
+train_sample_ratio = 1
 pre_select_evidence_num = 1000
-loader_batch_size = 24
+loader_batch_size = 32
 loader_worker_num = 2
+num_epoch = 1
 evidence_selection_threshold = 0.5
 max_evi = 5
-er_filename = "evidence-retrival-only-results.json"
+# ----------------------------------------------
 
 
 class CFEVERERDataset(Dataset):
@@ -86,6 +91,22 @@ def generate_train_evidence_samples(evidences_, claim_evidences, evidences_tfidf
     return samples_with_labels
 
 
+# def generate_train_evidence_samples(evidences_, claim_evidences, evidences_tfidf, claim_tfidf, sample_ratio):
+#     # Get positive samples
+#     samples = claim_evidences.copy()  # evidence ids
+
+#     # Get negative samples
+#     while len(samples) < len(claim_evidences) * (sample_ratio + 1):
+#         neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
+        
+#         if neg_sample not in samples:
+#             samples.append(neg_sample)
+
+#     samples_with_labels = list(zip(samples, [1] * len(claim_evidences) + [0] * (len(samples) - len(claim_evidences))))
+
+#     return samples_with_labels
+
+
 def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates):
     """
     :param evidences_: the full evidence set.
@@ -103,11 +124,11 @@ def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, 
 
 
 def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio, max_candidates):
+    st = time.time()
+    
     vectorizer = TfidfVectorizer(stop_words='english')
     vectorizer.fit(list(evidences.values()) + [claims[c]["claim_text"] for c in claims])
     evidences_tfidf = vectorizer.transform(evidences.values())
-
-    st = time.time()
 
     if is_train:
         train_claim_evidence_pairs = []
@@ -170,7 +191,7 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, max_eps, dev_claims, gpu):
+def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps=num_epoch):
     best_f1 = 0
     st = time.time()
 
@@ -222,13 +243,20 @@ def get_probs_from_logits(logits, threshold=0.5):
     return probs.squeeze()
 
 
-def reselect_candidates(existing_candidates, new_candidate, max_candidates=max_evi):
-    return sorted(existing_candidates + [new_candidate], key=lambda x: x[0], reverse=True)[:max_candidates]
+def select_evi_candidates_df(df, threshold, max_candidates):
+    max_prob_evi = df[df['probs'] == df['probs'].max()]
 
-def predict(net, dataloader, gpu, threshold=evidence_selection_threshold):
+    df = df[df['probs'] > threshold].nlargest(max_candidates, "probs")
+
+    if len(df) == 0:
+        df = max_prob_evi
+
+    return df
+
+def predict(net, dataloader, gpu, threshold=evidence_selection_threshold, max_candidates=max_evi):
     net.eval()
 
-    claim_evidences = {}
+    claim_evidences = defaultdict(list)
     df = pd.DataFrame()
 
     with torch.no_grad():  # suspend grad track, save time and memory
@@ -239,47 +267,19 @@ def predict(net, dataloader, gpu, threshold=evidence_selection_threshold):
             
             df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "probs": probs})], ignore_index=True)
 
-    unfiltered_claim_evidences = df.groupby("claim_ids").apply(lambda group: [(row["evidence_ids"], row["probs"]) for _, row in group.iterrows()]).to_dict()
+    # groupby gives a df for each claim_ids, then for each df, apply() the selection, finally reset_index to get rid of the multi-index
+    filtered_claim_evidences_df = df.groupby('claim_ids').apply(lambda x: select_evi_candidates_df(x, threshold, max_candidates)).reset_index(drop=True)
     
     with open('/content/drive/MyDrive/Colab Notebooks/Assignment3/claim_evidences.json', 'w') as f:
-        json.dump(unfiltered_claim_evidences, f)
+        json.dump(filtered_claim_evidences_df, f)
 
-    
+    for _, row in filtered_claim_evidences_df.iterrows():
+        claim_id = row['claim_ids']
+        evidence_id = row['evidence_ids']
+
+        claim_evidences[claim_id].append(evidence_id)
     
     return claim_evidences
-
-
-# def predict(net, dataloader, gpu, threshold=evidence_selection_threshold):
-#     net.eval()
-
-#     claim_evidences = defaultdict(lambda: [(-math.inf, None)] * max_evi)
-
-#     with torch.no_grad():  # suspend grad track, save time and memory
-#         for seq, attn_masks, segment_ids, position_ids, claim_ids, evidence_ids in dataloader:
-#             seq, attn_masks, segment_ids, position_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), position_ids.cuda(gpu)
-#             logits = net(seq, attn_masks, segment_ids, position_ids)
-#             probs = get_probs_from_logits(logits)
-            
-#             for i, prob in enumerate(probs):
-#                 claim_evidences[claim_ids[i]] = reselect_candidates(claim_evidences[claim_ids[i]], (prob.item(), evidence_ids[i]))
-    
-#     with open('claim_evidences.json', 'w') as f:
-#         json.dump(claim_evidences, f)
-
-#     for claim_id in claim_evidences.keys():
-#         selected_evidences = []
-
-#         for e in claim_evidences[claim_id]:
-#             if e[0] > threshold:
-#                 selected_evidences.append(e[1])
-
-#         if len(selected_evidences) == 0:
-#             top_e = max(claim_evidences[claim_id], key=lambda x:x[0])
-#             selected_evidences = top_e[1]
-        
-#         claim_evidences[claim_id] = [selected_evidences]
-    
-#     return claim_evidences
 
 
 def evaluate(net, dataloader, dev_claims, gpu):
@@ -303,7 +303,7 @@ def evaluate(net, dataloader, dev_claims, gpu):
 
 
 def extract_er_result(claim_evidences, claims, filename=er_filename):
-    extracted_claims = claims.copy()
+    extracted_claims = copy.deepcopy(claims)
 
     for c in extracted_claims:
         extracted_claims[c]["evidences"] = claim_evidences[c]
@@ -371,19 +371,18 @@ if __name__ == '__main__':
     # dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
     # #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
+    # ver = 0
     # net = CFEVERERClassifier()
+    # net.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls_{}.dat'.format(ver)))
     # net.cuda(gpu) #Enable gpu support for the model
 
     # loss_criterion = nn.BCEWithLogitsLoss()
     # opti = optim.Adam(net.parameters(), lr=2e-5)
 
-    # num_epoch = 1
-
     # # fine-tune the model
-    # train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, num_epoch, dev_claims, gpu)
+    # train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu)
 
     # # claim_evidences = predict(net, test_loader, gpu)
     # # test_claims = extract_er_result(claim_evidences, test_claims)
 
     #-------------------------------------------------------------
-
