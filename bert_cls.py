@@ -31,10 +31,11 @@ num_of_classes = 3
 class CFEVERLabelDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Training, for the Evidence Retrival task."""
 
-    def __init__(self, claims, max_len=input_seq_max_len):
+    def __init__(self, claims, evidences_, max_len=input_seq_max_len):
         self.data_set = unroll_claim_labels(claims)
         self.max_len = max_len
         self.claims = claims
+        self.evidences = evidences_
 
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
@@ -42,10 +43,7 @@ class CFEVERLabelDataset(Dataset):
         return len(self.data_set)
 
     def __getitem__(self, index):
-        if self.is_train:
-            claim_id, evidence_id, label = self.data_set[index]
-        else:
-            claim_id, evidence_id = self.data_set[index]
+        claim_id, evidence_id, label = self.data_set[index]
 
         # Preprocessing the text to be suitable for BERT
         claim_evidence_in_tokens = self.tokenizer.encode_plus(self.claims[claim_id]['claim_text'], self.evidences[evidence_id], 
@@ -55,7 +53,7 @@ class CFEVERLabelDataset(Dataset):
         seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
                 'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
     
-        return (seq, attn_masks, segment_ids, position_ids, label) if self.is_train else (seq, attn_masks, segment_ids, position_ids, claim_id, evidence_id)
+        return seq, attn_masks, segment_ids, position_ids, label
 
 
 def unroll_claim_labels(claims):
@@ -96,7 +94,7 @@ class CFEVERLabelClassifier(nn.Module):
         return logits  # logits shape is [B, num_of_classes]
 
 
-def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps=num_epoch):
+def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, gpu, max_eps=num_epoch):
     best_acc = 0
     st = time.time()
 
@@ -114,7 +112,7 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
             logits = net(seq, attn_masks, segment_ids, position_ids)
 
             # Computing loss
-            loss = loss_criterion(logits.squeeze(-1), labels.float())
+            loss = loss_criterion(logits, labels.float())
 
             # Backpropagating the gradients, account for gradients
             loss.backward()

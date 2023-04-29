@@ -31,7 +31,7 @@ pre_select_evidence_num = 1000
 loader_batch_size = 32
 loader_worker_num = 2
 num_epoch = 1
-evidence_selection_threshold = 0.5
+evidence_selection_threshold = 0.7
 max_evi = 5
 # ----------------------------------------------
 
@@ -68,44 +68,28 @@ class CFEVERERDataset(Dataset):
         return (seq, attn_masks, segment_ids, position_ids, label) if self.is_train else (seq, attn_masks, segment_ids, position_ids, claim_id, evidence_id)
 
 
-def generate_train_evidence_samples(evidences_, claim_evidences, evidences_tfidf, claim_tfidf, sample_ratio):
+def generate_train_evidence_samples(evidences_, claim_evidences, sample_ratio):
     """
     Generate training samples for each of the claims for the evidence retrieval task.
     :param evidences_: the full evidence set.
     :param claim_evidences: the ground truth evidence set for the claim. In the form of a list of evidence ids
-    :param evidences_tfidf: The tfidf matrix of the entire evidence set
-    :param claim_tfidf: The tfidf vector of the query claim (also a matrix technically).
     :param sample_ratio: the ratio of positive to negative samples: neg/pos
     :return: a list of evidence samples zipped with the corresponding labels. - (evi id, label)
     """
-
+        
     # Get positive samples
     samples = claim_evidences.copy()  # evidence ids
 
-    similarity = cosine_similarity(claim_tfidf, evidences_tfidf).squeeze()
-    df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": similarity})
-
-    samples += df[~df['evidences'].isin(samples)].nlargest(len(claim_evidences) * sample_ratio, 'similarity')['evidences'].tolist()
+    # Get negative samples
+    while len(samples) < len(claim_evidences) * (sample_ratio + 1):
+        neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
+        
+        if neg_sample not in samples:
+            samples.append(neg_sample)
 
     samples_with_labels = list(zip(samples, [1] * len(claim_evidences) + [0] * (len(samples) - len(claim_evidences))))
 
     return samples_with_labels
-
-
-# def generate_train_evidence_samples(evidences_, claim_evidences, evidences_tfidf, claim_tfidf, sample_ratio):
-#     # Get positive samples
-#     samples = claim_evidences.copy()  # evidence ids
-
-#     # Get negative samples
-#     while len(samples) < len(claim_evidences) * (sample_ratio + 1):
-#         neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
-        
-#         if neg_sample not in samples:
-#             samples.append(neg_sample)
-
-#     samples_with_labels = list(zip(samples, [1] * len(claim_evidences) + [0] * (len(samples) - len(claim_evidences))))
-
-#     return samples_with_labels
 
 
 def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates):
@@ -126,18 +110,11 @@ def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, 
 
 def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio, max_candidates):
     st = time.time()
-    
-    vectorizer = TfidfVectorizer(stop_words='english')
-    vectorizer.fit(list(evidences.values()) + [claims[c]["claim_text"] for c in claims])
-    evidences_tfidf = vectorizer.transform(evidences.values())
 
     if is_train:
         train_claim_evidence_pairs = []
         for claim in claims:
-            claim_tfidf = vectorizer.transform([claims[claim]['claim_text']])
-
-            for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'],
-                                                                            evidences_tfidf, claim_tfidf, sample_ratio):
+            for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], sample_ratio):
                 train_claim_evidence_pairs.append((claim, train_evidence_id, label))
 
         random.shuffle(train_claim_evidence_pairs)
@@ -145,6 +122,10 @@ def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio, max_candi
 
         return train_claim_evidence_pairs
     else:
+        vectorizer = TfidfVectorizer(stop_words='english')
+        vectorizer.fit(list(evidences.values()) + [claims[c]["claim_text"] for c in claims])
+        evidences_tfidf = vectorizer.transform(evidences.values())
+
         test_claim_evidence_pairs = []
         for claim in claims:
             claim_tfidf = vectorizer.transform([claims[claim]['claim_text']])
@@ -192,12 +173,12 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps=num_epoch):
+def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch):
     best_f1 = 0
-    st = time.time()
-
+    
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
+        st = time.time()
         
         for i, (seq, attn_masks, segment_ids, position_ids, labels) in enumerate(train_loader):
             # Reset/Clear gradients
@@ -222,13 +203,18 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_
                 acc = get_accuracy_from_logits(logits, labels)
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
-
+        
+        print("\nReseting training data...")
+        train_set.reset_data()
+        train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+        print("Training data reset!\n")
+        
         f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
-        print("Epoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
+        print("\nEpoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
         if f1 > best_f1:
-            print("Best development f1 improved from {} to {}, saving model...".format(best_f1, f1))
+            print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
             best_f1 = f1
-            torch.save(net.state_dict(), 'cfeverercls_{}.dat'.format(ep))
+            torch.save(net.state_dict(), '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls_{}.dat'.format(ep))
 
 
 def get_accuracy_from_logits(logits, labels):
@@ -238,7 +224,7 @@ def get_accuracy_from_logits(logits, labels):
     return acc
 
 
-def get_probs_from_logits(logits, threshold=0.5):
+def get_probs_from_logits(logits):
     probs = torch.sigmoid(logits.unsqueeze(-1))
 
     return probs.squeeze()
@@ -270,9 +256,6 @@ def predict(net, dataloader, gpu, threshold=evidence_selection_threshold, max_ca
 
     # groupby gives a df for each claim_ids, then for each df, apply() the selection, finally reset_index to get rid of the multi-index
     filtered_claim_evidences_df = df.groupby('claim_ids').apply(lambda x: select_evi_candidates_df(x, threshold, max_candidates)).reset_index(drop=True)
-    
-    with open('/content/drive/MyDrive/Colab Notebooks/Assignment3/claim_evidences.json', 'w') as f:
-        json.dump(filtered_claim_evidences_df, f)
 
     for _, row in filtered_claim_evidences_df.iterrows():
         claim_id = row['claim_ids']
@@ -381,7 +364,7 @@ if __name__ == '__main__':
     # opti = optim.Adam(net.parameters(), lr=2e-5)
 
     # # fine-tune the model
-    # train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu)
+    # train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
 
     # # claim_evidences = predict(net, test_loader, gpu)
     # # test_claims = extract_er_result(claim_evidences, test_claims)
