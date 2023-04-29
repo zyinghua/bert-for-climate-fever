@@ -13,6 +13,7 @@ import torch.optim as optim
 import time
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from dataset_loader import load_data
 
 
 evidence_key_prefix = 'evidence-'
@@ -224,12 +225,11 @@ def get_probs_from_logits(logits, threshold=0.5):
 def reselect_candidates(existing_candidates, new_candidate, max_candidates=max_evi):
     return sorted(existing_candidates + [new_candidate], key=lambda x: x[0], reverse=True)[:max_candidates]
 
-
 def predict(net, dataloader, gpu, threshold=evidence_selection_threshold):
     net.eval()
 
-    claim_evidences = defaultdict(lambda: [(-math.inf, None)] * max_evi)
-
+    claim_evidences = {}
+    df = pd.DataFrame()
 
     with torch.no_grad():  # suspend grad track, save time and memory
         for seq, attn_masks, segment_ids, position_ids, claim_ids, evidence_ids in dataloader:
@@ -237,26 +237,49 @@ def predict(net, dataloader, gpu, threshold=evidence_selection_threshold):
             logits = net(seq, attn_masks, segment_ids, position_ids)
             probs = get_probs_from_logits(logits)
             
-            for i, prob in enumerate(probs):
-                claim_evidences[claim_ids[i]] = reselect_candidates(claim_evidences[claim_ids[i]], (prob.item(), evidence_ids[i]))
+            df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "probs": probs})], ignore_index=True)
+
+    unfiltered_claim_evidences = df.groupby("claim_ids").apply(lambda group: [(row["evidence_ids"], row["probs"]) for _, row in group.iterrows()]).to_dict()
     
-    with open('claim_evidences.json', 'w') as f:
-        json.dump(claim_evidences, f)
+    with open('/content/drive/MyDrive/Colab Notebooks/Assignment3/claim_evidences.json', 'w') as f:
+        json.dump(unfiltered_claim_evidences, f)
 
-    for claim_id in claim_evidences.keys():
-        selected_evidences = []
-
-        for e in claim_evidences[claim_id]:
-            if e[0] > threshold:
-                selected_evidences.append(e[1])
-
-        if len(selected_evidences) == 0:
-            top_e = max(claim_evidences[claim_id], key=lambda x:x[0])
-            selected_evidences = top_e[1]
-        
-        claim_evidences[claim_id] = [selected_evidences]
+    
     
     return claim_evidences
+
+
+# def predict(net, dataloader, gpu, threshold=evidence_selection_threshold):
+#     net.eval()
+
+#     claim_evidences = defaultdict(lambda: [(-math.inf, None)] * max_evi)
+
+#     with torch.no_grad():  # suspend grad track, save time and memory
+#         for seq, attn_masks, segment_ids, position_ids, claim_ids, evidence_ids in dataloader:
+#             seq, attn_masks, segment_ids, position_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), position_ids.cuda(gpu)
+#             logits = net(seq, attn_masks, segment_ids, position_ids)
+#             probs = get_probs_from_logits(logits)
+            
+#             for i, prob in enumerate(probs):
+#                 claim_evidences[claim_ids[i]] = reselect_candidates(claim_evidences[claim_ids[i]], (prob.item(), evidence_ids[i]))
+    
+#     with open('claim_evidences.json', 'w') as f:
+#         json.dump(claim_evidences, f)
+
+#     for claim_id in claim_evidences.keys():
+#         selected_evidences = []
+
+#         for e in claim_evidences[claim_id]:
+#             if e[0] > threshold:
+#                 selected_evidences.append(e[1])
+
+#         if len(selected_evidences) == 0:
+#             top_e = max(claim_evidences[claim_id], key=lambda x:x[0])
+#             selected_evidences = top_e[1]
+        
+#         claim_evidences[claim_id] = [selected_evidences]
+    
+#     return claim_evidences
 
 
 def evaluate(net, dataloader, dev_claims, gpu):
@@ -280,22 +303,15 @@ def evaluate(net, dataloader, dev_claims, gpu):
 
 
 def extract_er_result(claim_evidences, claims, filename=er_filename):
-    for c in claims:
-        claims[c]["evidences"] = claim_evidences[c]
+    extracted_claims = claims.copy()
+
+    for c in extracted_claims:
+        extracted_claims[c]["evidences"] = claim_evidences[c]
     
     with open(filename, 'w') as f:
-        json.dump(claims, f)
+        json.dump(extracted_claims, f)
 
-    return claims
-
-
-def load_data(train_path, dev_path, test_path, evidence_path):
-    train_claims = json.load(open(train_path))
-    dev_claims = json.load(open(dev_path))
-    test_claims = json.load(open(test_path))
-    evidences = json.load(open(evidence_path))
-
-    return train_claims, dev_claims, test_claims, evidences
+    return extracted_claims
 
 
 def test_h(train_claims, dev_claims, evidences):
@@ -339,41 +355,35 @@ def test_h(train_claims, dev_claims, evidences):
 
 if __name__ == '__main__':
     random.seed(42)
+    train_claims, dev_claims, test_claims, evidences = load_data()
 
-    train_path = '../project-data/train-claims.json'
-    dev_path = '../project-data/dev-claims.json'
-    test_path = '../project-data/test-claims-unlabelled.json'
-    evidence_path = '../project-data/evidence.json'
+    #-------------------------------------------------------------
 
-    train_claims, dev_claims, test_claims, evidences = load_data(train_path, dev_path, test_path, evidence_path)
+    # # Creating instances of training and development set
+    # # max_len sets the maximum length that a sentence can have,
+    # # any sentence longer than that length is truncated to the max_len size
+    # train_set = CFEVERERDataset(train_claims, evidences, True)
+    # dev_set = CFEVERERDataset(dev_claims, evidences, False)
+    # #test_set = CFEVERERDataset(test_claims, evidences, False)
 
+    # #Creating intsances of training and development dataloaders
+    # train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    # dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    # #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
-    # Creating instances of training and development set
-    # max_len sets the maximum length that a sentence can have,
-    # any sentence longer than that length is truncated to the max_len size
-    train_set = CFEVERERDataset(train_claims, evidences, True)
-    dev_set = CFEVERERDataset(dev_claims, evidences, False)
-    #test_set = CFEVERERDataset(test_claims, evidences, False)
+    # net = CFEVERERClassifier()
+    # net.cuda(gpu) #Enable gpu support for the model
 
-    #Creating intsances of training and development dataloaders
-    train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    # loss_criterion = nn.BCEWithLogitsLoss()
+    # opti = optim.Adam(net.parameters(), lr=2e-5)
 
-    net = CFEVERERClassifier()
-    net.cuda(gpu) #Enable gpu support for the model
+    # num_epoch = 1
 
-    loss_criterion = nn.BCEWithLogitsLoss()
-    opti = optim.Adam(net.parameters(), lr=2e-5)
+    # # fine-tune the model
+    # train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, num_epoch, dev_claims, gpu)
 
-    num_epoch = 1
+    # # claim_evidences = predict(net, test_loader, gpu)
+    # # test_claims = extract_er_result(claim_evidences, test_claims)
 
-    # fine-tune the model
-    train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, num_epoch, dev_claims, gpu)
+    #-------------------------------------------------------------
 
-    # claim_evidences = predict(net, test_loader, gpu)
-    # test_claims = extract_er_result(claim_evidences, test_claims)
-
-
-
-    
