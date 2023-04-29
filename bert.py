@@ -14,6 +14,7 @@ import time
 import copy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from dataset_loader import load_data
 
 random.seed(42)
 evidence_key_prefix = 'evidence-'

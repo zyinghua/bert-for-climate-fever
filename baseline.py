@@ -21,7 +21,7 @@ def tfidf_cos_baseline(claims, evidences, evidence_select_num=10):
 
     for claim_id, evidences in claim_evidences.items():
         e_true = claims[claim_id]['evidences']
-        recall += len([e for e in evidences if e in e_true])/ len(e_true)
+        recall += len([e for e in evidences if e in e_true]) / len(e_true)
         precision += len([e for e in evidences if e in e_true]) / len(evidences)
 
     recall /= len(claim_evidences)
