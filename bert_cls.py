@@ -20,10 +20,10 @@ gpu = 0
 input_seq_max_len = 384
 loader_batch_size = 24
 loader_worker_num = 2
-num_epoch = 1
+num_epoch = 2
 num_of_classes = 3
-label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT ENOUGH INFO': 2}
-label_mapper_itol = {0: 'SUPPORTS', 1: 'REFUTES', 2: 'NOT ENOUGH INFO'}
+label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT_ENOUGH_INFO': 2}
+label_mapper_itol = {0: 'SUPPORTS', 1: 'REFUTES', 2: 'NOT_ENOUGH_INFO'}
 # ------------------------------------------------------
 
 class CFEVERLabelTrainDataset(Dataset):
@@ -64,8 +64,10 @@ def unroll_train_claim_evidence_pairs(claims):
 
     for claim_id in claims:
         if claims[claim_id]['claim_label'] != 'DISPUTED':
-            for evidence_id in claims[claim_id]['evidence']:
+            for evidence_id in claims[claim_id]['evidences']:
                 claim_evidence_pairs.append((claim_id, evidence_id, label_mapper_ltoi[claims[claim_id]['claim_label']]))
+    
+    return claim_evidence_pairs
 
 
 class CFEVERLabelTestDataset(Dataset):
@@ -100,8 +102,10 @@ def unroll_test_claim_evidence_pairs(claims):
     claim_evidence_pairs = []
 
     for claim_id in claims:
-        for evidence_id in claims[claim_id]['evidence']:
+        for evidence_id in claims[claim_id]['evidences']:
             claim_evidence_pairs.append((claim_id, evidence_id))
+    
+    return claim_evidence_pairs
 
 
 class CFEVERLabelClassifier(nn.Module):
@@ -221,8 +225,8 @@ def decide_claim_labels(claim_evidence_labels):
         if len(set(claim_evidence_labels[claim_id])) == 1:
             claim_labels[claim_id] = label_mapper_itol[claim_evidence_labels[claim_id][0]]
         elif len(set(claim_evidence_labels[claim_id])) == 2:
-            if label_mapper_ltoi['NOT ENOUGH INFO'] in claim_evidence_labels[claim_id]:
-                claim_labels[claim_id] = (set(claim_evidence_labels[claim_id]) - {label_mapper_ltoi['NOT ENOUGH INFO']}).pop()  # label as the other one: supports/refutes
+            if label_mapper_ltoi['NOT_ENOUGH_INFO'] in claim_evidence_labels[claim_id]:
+                claim_labels[claim_id] = (set(claim_evidence_labels[claim_id]) - {label_mapper_ltoi['NOT_ENOUGH_INFO']}).pop()  # label as the other one: supports/refutes
             else:
                 claim_labels[claim_id] = "DISPUTED"
         else:  # len(set(claim_evidence_labels[claim_id])) == 3
