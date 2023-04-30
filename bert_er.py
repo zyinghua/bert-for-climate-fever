@@ -30,7 +30,7 @@ train_sample_ratio = 1
 pre_select_evidence_num = 1000
 loader_batch_size = 24
 loader_worker_num = 2
-num_epoch = 1
+num_epoch = 5
 evidence_selection_threshold = 0.7
 hnm_threshold = 0.01
 max_evi = 5
@@ -52,9 +52,8 @@ class CFEVERERTrainDataset(Dataset):
     def __len__(self):
         return len(self.data_set)
     
-    def reset_data(self, claim_hard_negatives_pos):
-        #self.data_set = unroll_claim_evidences(self.claims, self.evidences, self.is_train, train_sample_ratio, pre_select_evidence_num)
-        self.data_set = handle_reset_train_data(claim_hard_negatives_pos, self.evidences, self.sample_ratio)
+    def reset_data(self):
+        self.data_set = unroll_train_claim_evidences(self.claims, self.evidences, self.sample_ratio)
 
     def __getitem__(self, index):
         claim_id, evidence_id, label = self.data_set[index]
@@ -197,7 +196,6 @@ def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, 
 
 
 class CFEVERERClassifier(nn.Module):
-
     def __init__(self):
         super(CFEVERERClassifier, self).__init__()
 
@@ -287,7 +285,7 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         
         st = time.time()
         print("\nReseting training data...")
-        train_set.reset_data(extract_hard_negatives(df))
+        train_set.reset_data()
         train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
         print(f"Training data reset! Time taken: {time.time() - st}.\n")
         
@@ -438,17 +436,17 @@ if __name__ == '__main__':
     # dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
     # #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
-    # net = CFEVERERClassifier()
-    # #net.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
-    # net.cuda(gpu) #Enable gpu support for the model
+    # net_er = CFEVERERClassifier()
+    # #net_er.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
+    # net_er.cuda(gpu) #Enable gpu support for the model
 
     # loss_criterion = nn.BCEWithLogitsLoss()
-    # opti = optim.Adam(net.parameters(), lr=2e-5)
+    # opti = optim.Adam(net_er.parameters(), lr=2e-5)
 
     # # fine-tune the model
-    # train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
+    # train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
 
-    # # claim_evidences = predict(net, test_loader, gpu)
+    # # claim_evidences = predict(net_er, test_loader, gpu)
     # # test_claims = extract_er_result(claim_evidences, test_claims)
 
     #-------------------------------------------------------------

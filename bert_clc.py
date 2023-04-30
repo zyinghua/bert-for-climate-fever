@@ -247,7 +247,7 @@ def evaluate_dev(net, dataloader, dev_claims, gpu):
             correct_labels += 1
         
         correct_labels_pairs += claim_evidence_labels[claim_id].count(label_mapper_ltoi[dev_claims[claim_id]["claim_label"]])
-        dev_evidence_num += len(dev_claims[claim_id]["evidence"])
+        dev_evidence_num += len(dev_claims[claim_id]["evidences"])
     
     return correct_labels / len(dev_claims), correct_labels_pairs / dev_evidence_num  # claim label accuracy, claim_evidence_pair label accuracy
 
@@ -255,11 +255,11 @@ def evaluate_dev(net, dataloader, dev_claims, gpu):
 if __name__ == '__main__':
     train_claims, dev_claims, test_claims, evidences = load_data()
 
-    # net = CFEVERLabelClassifier()
-    # #net.cuda(gpu) #Enable gpu support for the model
+    # net_clc = CFEVERLabelClassifier()
+    # #net_clc.cuda(gpu) #Enable gpu support for the model
 
     # loss_criterion = nn.CrossEntropyLoss()
-    # opti = optim.Adam(net.parameters(), lr=2e-5)
+    # opti = optim.Adam(net_clc.parameters(), lr=2e-5)
 
     # train_set = CFEVERLabelTrainDataset(train_claims, evidences)
     # dev_set = CFEVERLabelTestDataset(dev_claims, evidences)
@@ -270,4 +270,4 @@ if __name__ == '__main__':
     # #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
 
-    # train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu)
+    # train_claim_cls(net_clc, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu)
