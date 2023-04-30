@@ -28,24 +28,23 @@ gpu = 0
 input_seq_max_len = 384
 train_sample_ratio = 1
 pre_select_evidence_num = 1000
-loader_batch_size = 32
+loader_batch_size = 24
 loader_worker_num = 2
 num_epoch = 1
 evidence_selection_threshold = 0.7
-hnm_threshold = 0.1
+hnm_threshold = 0.01
 max_evi = 5
 # ----------------------------------------------
 
 
-class CFEVERERDataset(Dataset):
-    """Climate Fact Extraction and Verification Dataset for Training, for the Evidence Retrival task."""
+class CFEVERERTrainDataset(Dataset):
+    """Climate Fact Extraction and Verification Dataset for Train, for the Evidence Retrival task."""
 
-    def __init__(self, claims, evidences_, is_train, max_len=input_seq_max_len, sample_ratio=train_sample_ratio, max_candidates=pre_select_evidence_num):
-        self.data_set = unroll_claim_evidences(claims, evidences_, is_train, sample_ratio=sample_ratio, max_candidates=max_candidates)
+    def __init__(self, claims, evidences_, max_len=input_seq_max_len, sample_ratio=train_sample_ratio):
+        self.data_set = unroll_train_claim_evidences(claims, evidences_, sample_ratio=sample_ratio)
         self.max_len = max_len
         self.claims = claims
         self.evidences = evidences_
-        self.is_train  = is_train
         self.sample_ratio = sample_ratio
 
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -53,16 +52,12 @@ class CFEVERERDataset(Dataset):
     def __len__(self):
         return len(self.data_set)
     
-    def reset_train_data(self, claim_hard_negatives_pos):
-        if self.is_train:
-            #self.data_set = unroll_claim_evidences(self.claims, self.evidences, self.is_train, train_sample_ratio, pre_select_evidence_num)
-            self.data_set = handle_reset_train_data(claim_hard_negatives_pos, self.evidences, self.sample_ratio)
+    def reset_data(self, claim_hard_negatives_pos):
+        #self.data_set = unroll_claim_evidences(self.claims, self.evidences, self.is_train, train_sample_ratio, pre_select_evidence_num)
+        self.data_set = handle_reset_train_data(claim_hard_negatives_pos, self.evidences, self.sample_ratio)
 
     def __getitem__(self, index):
-        if self.is_train:
-            claim_id, evidence_id, label = self.data_set[index]
-        else:
-            claim_id, evidence_id = self.data_set[index]
+        claim_id, evidence_id, label = self.data_set[index]
 
         # Preprocessing the text to be suitable for BERT
         claim_evidence_in_tokens = self.tokenizer.encode_plus(self.claims[claim_id]['claim_text'], self.evidences[evidence_id], 
@@ -72,7 +67,68 @@ class CFEVERERDataset(Dataset):
         seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
                 'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
     
-        return (seq, attn_masks, segment_ids, position_ids, label, claim_id, evidence_id) if self.is_train else (seq, attn_masks, segment_ids, position_ids, claim_id, evidence_id)
+        return seq, attn_masks, segment_ids, position_ids, label, claim_id, evidence_id
+
+
+class CFEVERERTestDataset(Dataset):
+    """Climate Fact Extraction and Verification Dataset for Dev/Test, for the Evidence Retrival task."""
+
+    def __init__(self, claims, evidences_, max_len=input_seq_max_len, max_candidates=pre_select_evidence_num):
+        self.data_set = unroll_test_claim_evidences(claims, evidences_, max_candidates=max_candidates)
+        self.max_len = max_len
+        self.claims = claims
+        self.evidences = evidences_
+
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+    def __len__(self):
+        return len(self.data_set)
+
+    def __getitem__(self, index):
+        claim_id, evidence_id = self.data_set[index]
+
+        # Preprocessing the text to be suitable for BERT
+        claim_evidence_in_tokens = self.tokenizer.encode_plus(self.claims[claim_id]['claim_text'], self.evidences[evidence_id], 
+                                                              return_tensors='pt', padding='max_length', truncation=True,
+                                                              max_length=self.max_len, return_token_type_ids=True)
+        
+        seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
+                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
+    
+        return seq, attn_masks, segment_ids, position_ids, claim_id, evidence_id
+
+
+def unroll_train_claim_evidences(claims, evidences_, sample_ratio):
+    st = time.time()
+
+    train_claim_evidence_pairs = []
+    for claim in claims:
+        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], sample_ratio):
+            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
+
+    random.shuffle(train_claim_evidence_pairs)
+    print(f"Finished unrolling train claim-evidence pairs in {time.time() - st} seconds.")
+
+    return train_claim_evidence_pairs
+
+
+def unroll_test_claim_evidences(claims, evidences_, max_candidates):
+    st = time.time()
+
+    vectorizer = TfidfVectorizer(stop_words='english')
+    vectorizer.fit(list(evidences.values()) + [claims[c]["claim_text"] for c in claims])
+    evidences_tfidf = vectorizer.transform(evidences.values())
+
+    test_claim_evidence_pairs = []
+    for claim in claims:
+        claim_tfidf = vectorizer.transform([claims[claim]['claim_text']])
+
+        for test_evidence_id in generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates):
+            test_claim_evidence_pairs.append((claim, test_evidence_id))
+
+    print(f"Finished unrolling test claim-evidence pairs in {time.time() - st} seconds.")
+
+    return test_claim_evidence_pairs
 
 
 def handle_reset_train_data(claim_hard_negatives_pos, evidences_, sample_ratio):
@@ -138,36 +194,6 @@ def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, 
     potential_relevant_evidences = df.iloc[:max_candidates]["evidences"].tolist()
 
     return potential_relevant_evidences
-
-
-def unroll_claim_evidences(claims, evidences_, is_train, sample_ratio, max_candidates):
-    st = time.time()
-
-    if is_train:
-        train_claim_evidence_pairs = []
-        for claim in claims:
-            for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], sample_ratio):
-                train_claim_evidence_pairs.append((claim, train_evidence_id, label))
-
-        random.shuffle(train_claim_evidence_pairs)
-        print(f"Finished unrolling train claim-evidence pairs in {time.time() - st} seconds.")
-
-        return train_claim_evidence_pairs
-    else:
-        vectorizer = TfidfVectorizer(stop_words='english')
-        vectorizer.fit(list(evidences.values()) + [claims[c]["claim_text"] for c in claims])
-        evidences_tfidf = vectorizer.transform(evidences.values())
-
-        test_claim_evidence_pairs = []
-        for claim in claims:
-            claim_tfidf = vectorizer.transform([claims[claim]['claim_text']])
-
-            for test_evidence_id in generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates):
-                test_claim_evidence_pairs.append((claim, test_evidence_id))
-
-        print(f"Finished unrolling test claim-evidence pairs in {time.time() - st} seconds.")
-
-        return test_claim_evidence_pairs
 
 
 class CFEVERERClassifier(nn.Module):
@@ -261,7 +287,7 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         
         st = time.time()
         print("\nReseting training data...")
-        train_set.reset_train_data(extract_hard_negatives(df))
+        train_set.reset_data(extract_hard_negatives(df))
         train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
         print(f"Training data reset! Time taken: {time.time() - st}.\n")
         
@@ -403,9 +429,9 @@ if __name__ == '__main__':
     #-------------------------------------------------------------
 
     # # Creating instances of training, test and development set
-    # train_set = CFEVERERDataset(train_claims, evidences, True)
-    # dev_set = CFEVERERDataset(dev_claims, evidences, False)
-    # #test_set = CFEVERERDataset(test_claims, evidences, False)
+    # train_set = CFEVERERTrainDataset(train_claims, evidences)
+    # dev_set = CFEVERERTestDataset(dev_claims, evidences)
+    # #test_set = CFEVERERDataset(test_claims, evidences)
 
     # #Creating intsances of training, test and development dataloaders
     # train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
@@ -426,3 +452,5 @@ if __name__ == '__main__':
     # # test_claims = extract_er_result(claim_evidences, test_claims)
 
     #-------------------------------------------------------------
+
+    test_h(train_claims, dev_claims, evidences)

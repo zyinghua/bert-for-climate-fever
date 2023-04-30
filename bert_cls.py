@@ -1,16 +1,13 @@
-import json
 import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
-import random
 from transformers import BertTokenizer
 from transformers import BertModel
 from collections import Counter, defaultdict
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import time
-import copy
 from dataset_loader import load_data
 from torch.nn import functional as F
 
@@ -21,18 +18,19 @@ d_bert_base = 768
 d_bert_large = 1024
 gpu = 0
 input_seq_max_len = 384
-loader_batch_size = 32
+loader_batch_size = 24
 loader_worker_num = 2
 num_epoch = 1
 num_of_classes = 3
+label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT ENOUGH INFO': 2}
+label_mapper_itol = {0: 'SUPPORTS', 1: 'REFUTES', 2: 'NOT ENOUGH INFO'}
 # ------------------------------------------------------
 
-
-class CFEVERLabelDataset(Dataset):
+class CFEVERLabelTrainDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Training, for the Evidence Retrival task."""
 
     def __init__(self, claims, evidences_, max_len=input_seq_max_len):
-        self.data_set = unroll_claim_labels(claims)
+        self.data_set = unroll_train_claim_evidence_pairs(claims)
         self.max_len = max_len
         self.claims = claims
         self.evidences = evidences_
@@ -56,8 +54,54 @@ class CFEVERLabelDataset(Dataset):
         return seq, attn_masks, segment_ids, position_ids, label
 
 
-def unroll_claim_labels(claims):
-    pass
+def unroll_train_claim_evidence_pairs(claims):
+    """
+    Rule: 
+    Current approach considers all evidences to be with the 
+    label that the associated claim has, except for the DISPUTED label.
+    """
+    claim_evidence_pairs = []
+
+    for claim_id in claims:
+        if claims[claim_id]['claim_label'] != 'DISPUTED':
+            for evidence_id in claims[claim_id]['evidence']:
+                claim_evidence_pairs.append((claim_id, evidence_id, label_mapper_ltoi[claims[claim_id]['claim_label']]))
+
+
+class CFEVERLabelTestDataset(Dataset):
+    """Climate Fact Extraction and Verification Dataset for Testing, for the Evidence Retrival task."""
+
+    def __init__(self, claims, evidences_, max_len=input_seq_max_len):
+        self.data_set = unroll_test_claim_evidence_pairs(claims)
+        self.max_len = max_len
+        self.claims = claims
+        self.evidences = evidences_
+
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+    def __len__(self):
+        return len(self.data_set)
+
+    def __getitem__(self, index):
+        claim_id, evidence_id = self.data_set[index]
+
+        # Preprocessing the text to be suitable for BERT
+        claim_evidence_in_tokens = self.tokenizer.encode_plus(self.claims[claim_id]['claim_text'], self.evidences[evidence_id], 
+                                                              return_tensors='pt', padding='max_length', truncation=True,
+                                                              max_length=self.max_len, return_token_type_ids=True)
+        
+        seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
+                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
+    
+        return seq, attn_masks, segment_ids, position_ids, claim_id
+
+
+def unroll_test_claim_evidence_pairs(claims):
+    claim_evidence_pairs = []
+
+    for claim_id in claims:
+        for evidence_id in claims[claim_id]['evidence']:
+            claim_evidence_pairs.append((claim_id, evidence_id))
 
 
 class CFEVERLabelClassifier(nn.Module):
@@ -94,7 +138,7 @@ class CFEVERLabelClassifier(nn.Module):
         return logits  # logits shape is [B, num_of_classes]
 
 
-def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, gpu, max_eps=num_epoch):
+def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps=num_epoch):
     best_acc = 0
     st = time.time()
 
@@ -112,7 +156,7 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, gpu, ma
             logits = net(seq, attn_masks, segment_ids, position_ids)
 
             # Computing loss
-            loss = loss_criterion(logits, labels.float())
+            loss = loss_criterion(logits, labels)
 
             # Backpropagating the gradients, account for gradients
             loss.backward()
@@ -125,12 +169,12 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, gpu, ma
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
 
-        dev_acc = evaluate(net, dev_loader, gpu)
-        print("Epoch {} complete! Development F1: {}; Development Accuracy:{}".format(ep, dev_acc))
-        if acc > best_acc:
-            print("Best development f1 improved from {} to {}, saving model...".format(best_acc, dev_acc))
-            best_acc = dev_acc
-            torch.save(net.state_dict(), 'cfeverercls_{}.dat'.format(ep))
+        dev_acc_claim, dev_acc_ce_pair = evaluate_dev(net, dev_loader, dev_claims, gpu)
+        print("Epoch {} complete! Development Accuracy on claim labels: {}; Development Accuracy on claim evidence pair labels:{}".format(ep, dev_acc_claim, dev_acc_ce_pair))
+        if dev_acc_claim > best_acc:
+            print("Best development accuracy improved from {} to {}, saving model...".format(best_acc, dev_acc_claim))
+            best_acc = dev_acc_claim
+            torch.save(net.state_dict(), 'cfeverlabelcls.dat')
 
 
 def get_accuracy_from_logits(logits, labels):
@@ -140,24 +184,71 @@ def get_accuracy_from_logits(logits, labels):
     return acc
 
 
-def evaluate(net, dataloader, gpu):
+def get_predictions_from_logits(logits):
+    probs = F.softmax(logits, dim=-1)
+    predicted_classes = torch.argmax(probs)
+    return predicted_classes.squeeze()
+
+
+def predict_pairs(net, dataloader, gpu):
     net.eval()
 
-    mean_acc = 0
-    count = 0
+    claim_evidence_labels = defaultdict(list)
+    df = pd.DataFrame()
 
     with torch.no_grad():
-        for seq, attn_masks, labels in dataloader:
-            seq, attn_masks, labels = seq.cuda(gpu), attn_masks.cuda(gpu), labels.cuda(gpu)
-            logits = net(seq, attn_masks)
-            mean_acc += get_accuracy_from_logits(logits, labels)
-            count += 1
+        for seq, attn_masks, segment_ids, position_ids, claim_ids in dataloader:
+            seq, attn_masks, segment_ids, position_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), position_ids.cuda(gpu)
+            logits = net(seq, attn_masks, segment_ids, position_ids)
+            preds = get_predictions_from_logits(logits)
 
-    return mean_acc / count
+            df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "preds": preds.cpu()})], ignore_index=True)
+
+
+    for _, row in df.iterrows():
+        claim_id = row['claim_ids']
+        label = row['preds']
+
+        claim_evidence_labels[claim_id].append(label)
+    
+    return claim_evidence_labels
+
+
+def decide_claim_labels(claim_evidence_labels):
+    claim_labels = {}
+
+    for claim_id in claim_evidence_labels:
+        if len(set(claim_evidence_labels[claim_id])) == 1:
+            claim_labels[claim_id] = label_mapper_itol[claim_evidence_labels[claim_id][0]]
+        elif len(set(claim_evidence_labels[claim_id])) == 2:
+            if label_mapper_ltoi['NOT ENOUGH INFO'] in claim_evidence_labels[claim_id]:
+                claim_labels[claim_id] = (set(claim_evidence_labels[claim_id]) - {label_mapper_ltoi['NOT ENOUGH INFO']}).pop()  # label as the other one: supports/refutes
+            else:
+                claim_labels[claim_id] = "DISPUTED"
+        else:  # len(set(claim_evidence_labels[claim_id])) == 3
+            claim_labels[claim_id] = "DISPUTED"
+    
+    return claim_labels
+
+
+def evaluate_dev(net, dataloader, dev_claims, gpu):
+    claim_evidence_labels = predict_pairs(net, dataloader, gpu)
+
+    claim_labels = decide_claim_labels(claim_evidence_labels)
+
+    correct_labels, correct_labels_pairs, dev_evidence_num = 0.0, 0.0, 0
+
+    for claim_id in dev_claims:
+        if claim_labels[claim_id] == dev_claims[claim_id]["claim_label"]:
+            correct_labels += 1
+        
+        correct_labels_pairs += claim_evidence_labels[claim_id].count(label_mapper_ltoi[dev_claims[claim_id]["claim_label"]])
+        dev_evidence_num += len(dev_claims[claim_id]["evidence"])
+    
+    return correct_labels / len(dev_claims), correct_labels_pairs / dev_evidence_num  # claim label accuracy, claim_evidence_pair label accuracy
 
 
 if __name__ == '__main__':
-    random.seed(42)
     train_claims, dev_claims, test_claims, evidences = load_data()
 
     # net = CFEVERLabelClassifier()
@@ -166,10 +257,9 @@ if __name__ == '__main__':
     # loss_criterion = nn.CrossEntropyLoss()
     # opti = optim.Adam(net.parameters(), lr=2e-5)
 
-
-    # train_set = CFEVERLabelDataset(train_claims, evidences)
-    # dev_set = CFEVERLabelDataset(dev_claims, evidences)
-    # #test_set = CFEVERERDataset(test_claims, evidences)
+    # train_set = CFEVERLabelTrainDataset(train_claims, evidences)
+    # dev_set = CFEVERLabelTestDataset(dev_claims, evidences)
+    # #test_set = CFEVERERLabelTestDataset(test_claims, evidences)
 
     # train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
     # dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
