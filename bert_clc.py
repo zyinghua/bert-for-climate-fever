@@ -173,11 +173,11 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
 
-        dev_acc_claim, dev_acc_ce_pair = evaluate_dev(net, dev_loader, dev_claims, gpu)
-        print("Epoch {} complete! Development Accuracy on claim labels: {}; Development Accuracy on claim evidence pair labels:{}".format(ep, dev_acc_claim, dev_acc_ce_pair))
-        if dev_acc_claim > best_acc:
-            print("Best development accuracy improved from {} to {}, saving model...".format(best_acc, dev_acc_claim))
-            best_acc = dev_acc_claim
+        dev_acc = evaluate_dev(net, dev_loader, dev_claims, gpu)
+        print("Epoch {} complete! Development Accuracy on claim labels: {}.".format(ep, dev_acc))
+        if dev_acc > best_acc:
+            print("Best development accuracy improved from {} to {}, saving model...".format(best_acc, dev_acc))
+            best_acc = dev_acc
             torch.save(net.state_dict(), 'cfeverlabelcls.dat')
 
 
@@ -218,7 +218,8 @@ def predict_pairs(net, dataloader, gpu):
     return claim_evidence_labels
 
 
-def decide_claim_labels(claim_evidence_labels):
+def decide_claim_labels(net, dataloader, gpu):
+    claim_evidence_labels = predict_pairs(net, dataloader, gpu)
     claim_labels = {}
 
     for claim_id in claim_evidence_labels:
@@ -236,20 +237,15 @@ def decide_claim_labels(claim_evidence_labels):
 
 
 def evaluate_dev(net, dataloader, dev_claims, gpu):
-    claim_evidence_labels = predict_pairs(net, dataloader, gpu)
+    claim_labels = decide_claim_labels(net, dataloader, gpu)
 
-    claim_labels = decide_claim_labels(claim_evidence_labels)
-
-    correct_labels, correct_labels_pairs, dev_evidence_num = 0.0, 0.0, 0
+    correct_labels = 0
 
     for claim_id in dev_claims:
         if claim_labels[claim_id] == dev_claims[claim_id]["claim_label"]:
             correct_labels += 1
-        
-        correct_labels_pairs += claim_evidence_labels[claim_id].count(label_mapper_ltoi[dev_claims[claim_id]["claim_label"]])
-        dev_evidence_num += len(dev_claims[claim_id]["evidences"])
     
-    return correct_labels / len(dev_claims), correct_labels_pairs / dev_evidence_num  # claim label accuracy, claim_evidence_pair label accuracy
+    return correct_labels / len(dev_claims)  # claim label accuracy
 
 
 if __name__ == '__main__':
