@@ -259,7 +259,7 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch, eval_dev=True):
+def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch, hnm=False):
     best_f1 = 0
     
     for ep in range(max_eps):
@@ -290,13 +290,14 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
         
-        st = time.time()
-        print("\nReseting training data...")
-        train_set.reset_data()
-        train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-        print(f"Training data reset!\n")
+        if not hnm:
+            st = time.time()
+            print("\nReseting training data...")
+            train_set.reset_data_random()
+            train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+            print(f"Training data reset!\n")
         
-        if eval_dev:
+        if hnm:  # Enable dev eval if hnm is integrated
             f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
             print("\nEpoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
             if f1 > best_f1:
@@ -409,10 +410,11 @@ def er_pipeline():
     opti = optim.Adam(net_er.parameters(), lr=2e-5)
 
     # First phrase: fine-tune the model on random samples
-    train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, eval_dev=False)
-
-    train_set.reset_data_hnm(hnm(net_er, train_claims, evidences, gpu))
     train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
+
+    # Second phrase: fine-tune the model on hnm with few random samples
+    train_set.reset_data_hnm(hnm(net_er, train_claims, evidences, gpu))
+    train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, hnm=True)
     #net_er.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
 
     # test_set = CFEVERERTestDataset(test_claims, evidences)

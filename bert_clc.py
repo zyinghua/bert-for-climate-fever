@@ -20,8 +20,9 @@ gpu = 0
 input_seq_max_len = 384
 loader_batch_size = 24
 loader_worker_num = 2
-num_epoch = 2
+num_epoch = 7
 num_of_classes = 3
+opti_lr_clc = 2e-5
 label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT_ENOUGH_INFO': 2}
 label_mapper_itol = {0: 'SUPPORTS', 1: 'REFUTES', 2: 'NOT_ENOUGH_INFO'}
 # ------------------------------------------------------
@@ -178,7 +179,7 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
         if dev_acc > best_acc:
             print("Best development accuracy improved from {} to {}, saving model...".format(best_acc, dev_acc))
             best_acc = dev_acc
-            torch.save(net.state_dict(), 'cfeverlabelcls.dat')
+            torch.save(net.state_dict(), '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverlabelcls.dat')
 
 
 def get_accuracy_from_logits(logits, labels):
@@ -255,7 +256,7 @@ if __name__ == '__main__':
     # #net_clc.cuda(gpu) #Enable gpu support for the model
 
     # loss_criterion = nn.CrossEntropyLoss()
-    # opti = optim.Adam(net_clc.parameters(), lr=2e-5)
+    # opti = optim.Adam(net_clc.parameters(), lr=opti_lr_clc)
 
     # train_set = CFEVERLabelTrainDataset(train_claims, evidences)
     # dev_set = CFEVERLabelTestDataset(dev_claims, evidences)
