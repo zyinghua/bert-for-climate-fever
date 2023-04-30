@@ -18,7 +18,7 @@ from dataset_loader import load_data
 
 random.seed(42)
 evidence_key_prefix = 'evidence-'
-er_filename = "evidence-retrival-only-results.json"
+er_filename = "../project-data/evidence-retrival-only-results.json"
 
 # ----------Hyperparameters of the entire pipeline----------
 # --------------Evidence Retrival--------------
@@ -32,6 +32,7 @@ loader_batch_size = 32
 loader_worker_num = 2
 num_epoch = 1
 evidence_selection_threshold = 0.7
+hnm_threshold = 0.1
 max_evi = 5
 # ----------------------------------------------
 
@@ -45,14 +46,17 @@ class CFEVERERDataset(Dataset):
         self.claims = claims
         self.evidences = evidences_
         self.is_train  = is_train
+        self.sample_ratio = sample_ratio
 
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     def __len__(self):
         return len(self.data_set)
     
-    def reset_data(self):
-        self.data_set = unroll_claim_evidences(self.claims, self.evidences, self.is_train, train_sample_ratio, pre_select_evidence_num)
+    def reset_train_data(self, claim_hard_negatives_pos):
+        if self.is_train:
+            #self.data_set = unroll_claim_evidences(self.claims, self.evidences, self.is_train, train_sample_ratio, pre_select_evidence_num)
+            self.data_set = handle_reset_train_data(claim_hard_negatives_pos, self.evidences, self.sample_ratio)
 
     def __getitem__(self, index):
         if self.is_train:
@@ -68,7 +72,32 @@ class CFEVERERDataset(Dataset):
         seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
                 'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
     
-        return (seq, attn_masks, segment_ids, position_ids, label) if self.is_train else (seq, attn_masks, segment_ids, position_ids, claim_id, evidence_id)
+        return (seq, attn_masks, segment_ids, position_ids, label, claim_id, evidence_id) if self.is_train else (seq, attn_masks, segment_ids, position_ids, claim_id, evidence_id)
+
+
+def handle_reset_train_data(claim_hard_negatives_pos, evidences_, sample_ratio):
+    train_claim_evidence_pairs = []
+    for claim in claim_hard_negatives_pos:
+        pos_count = 0
+        for train_evidence_id, label in claim_hard_negatives_pos[claim]:
+            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
+
+            if label == 1:
+                pos_count += 1
+
+        supplement_num = pos_count * (sample_ratio + 1) + math.floor(pos_count/2) * sample_ratio - len(claim_hard_negatives_pos[claim])
+        generated = []
+
+        for i in range(supplement_num):
+            neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))
+
+            if neg_sample not in claim_hard_negatives_pos[claim] + generated:
+                train_claim_evidence_pairs.append((claim, neg_sample, 0))
+                generated.append(neg_sample)
+
+    random.shuffle(train_claim_evidence_pairs)
+    
+    return train_claim_evidence_pairs
 
 
 def generate_train_evidence_samples(evidences_, claim_evidences, sample_ratio):
@@ -176,14 +205,35 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
+def extract_hard_negatives(df, threshold=hnm_threshold):
+    claim_hard_negatives_pos = defaultdict(list)
+
+    pos_counts = df[df['labels'] == 1].groupby('claim_ids').size().reset_index(name='pos_count').set_index('claim_ids')['pos_count'].to_dict()
+    df_true = df[df['labels'] == 1]
+
+    df = df.groupby('claim_ids').apply(lambda x: x[(x['probs'] > threshold) & (x['labels'] == 0)].nlargest(pos_counts[x.name] * train_sample_ratio, 'probs')).reset_index(drop=True)  # find HNs
+    df_concat = pd.concat([df_true, df]).reset_index(drop=True)
+
+    for _, row in df_concat.iterrows():
+        claim_id = row['claim_ids']
+        evidence_id = row['evidence_ids']
+
+        # A claim does not necessarily contain HNs
+        claim_hard_negatives_pos[claim_id].append((evidence_id, row['labels']))
+        
+    return claim_hard_negatives_pos
+
+
 def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch):
     best_f1 = 0
     
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
         st = time.time()
+
+        df = pd.DataFrame()
         
-        for i, (seq, attn_masks, segment_ids, position_ids, labels) in enumerate(train_loader):
+        for i, (seq, attn_masks, segment_ids, position_ids, labels, claim_ids, evidence_ids) in enumerate(train_loader):
             # Reset/Clear gradients
             opti.zero_grad()
 
@@ -202,15 +252,18 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
             # Optimization step, apply the gradients
             opti.step()
 
+            df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "labels": labels.detach().cpu(), "probs": get_probs_from_logits(logits).detach().cpu()})], ignore_index=True)
+
             if i % 100 == 0:
                 acc = get_accuracy_from_logits(logits, labels)
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
         
+        st = time.time()
         print("\nReseting training data...")
-        train_set.reset_data()
+        train_set.reset_train_data(extract_hard_negatives(df))
         train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-        print("Training data reset!\n")
+        print(f"Training data reset! Time taken: {time.time() - st}.\n")
         
         f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
         print("\nEpoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
@@ -255,7 +308,7 @@ def predict(net, dataloader, gpu, threshold=evidence_selection_threshold, max_ca
             logits = net(seq, attn_masks, segment_ids, position_ids)
             probs = get_probs_from_logits(logits)
             
-            df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "probs": probs})], ignore_index=True)
+            df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "probs": probs.cpu()})], ignore_index=True)
 
     # groupby gives a df for each claim_ids, then for each df, apply() the selection, finally reset_index to get rid of the multi-index
     filtered_claim_evidences_df = df.groupby('claim_ids').apply(lambda x: select_evi_candidates_df(x, threshold, max_candidates)).reset_index(drop=True)
@@ -269,26 +322,6 @@ def predict(net, dataloader, gpu, threshold=evidence_selection_threshold, max_ca
     return claim_evidences
 
 
-def evaluate(net, dataloader, dev_claims, gpu):
-    claim_evidences = predict(net, dataloader, gpu)
-    recall, precision = 0.0, 0.0
-
-    for claim_id, evidences in claim_evidences.items():
-        e_true = dev_claims[claim_id]['evidences']
-        recall += len([e for e in evidences if e in e_true])/ len(e_true)
-        precision += len([e for e in evidences if e in e_true]) / len(evidences)
-
-    recall /= len(claim_evidences)
-    precision /= len(claim_evidences)
-
-    extract_er_result(claim_evidences, dev_claims)
-
-    if recall + precision == 0.0:
-        return 0.0, 0.0, 0.0
-    else:
-        return 2 * (precision * recall) / (precision + recall), recall, precision  # F1 Score, recall, precision
-
-
 def extract_er_result(claim_evidences, claims, filename=er_filename):
     extracted_claims = copy.deepcopy(claims)
 
@@ -299,6 +332,29 @@ def extract_er_result(claim_evidences, claims, filename=er_filename):
         json.dump(extracted_claims, f)
 
     return extracted_claims
+
+
+def evaluate(net, dataloader, dev_claims, gpu):
+    claim_evidences = predict(net, dataloader, gpu)
+    extract_er_result(claim_evidences, dev_claims)
+
+    fscores, recalls, precisions = [], [], []
+
+    for claim_id, evidences in claim_evidences.items():
+        e_true = dev_claims[claim_id]['evidences']
+        recall = len([e for e in evidences if e in e_true]) / len(e_true)
+        precision = len([e for e in evidences if e in e_true]) / len(evidences)
+        fscore = 2 * (precision * recall) / (precision + recall) if precision + recall != 0 else 0.0
+
+        fscores.append(fscore)
+        precisions.append(precision)
+        recalls.append(recall)
+
+    mean_f = np.mean(fscores if len(fscores) > 0 else [0.0])
+    mean_recall = np.mean(recalls if len(recalls) > 0 else [0.0])
+    mean_precision = np.mean(precisions if len(precisions) > 0 else [0.0])
+
+    return mean_f, mean_recall, mean_precision  # F1 Score, recall, precision
 
 
 def test_h(train_claims, dev_claims, evidences):
@@ -346,27 +402,27 @@ if __name__ == '__main__':
 
     #-------------------------------------------------------------
 
-    # Creating instances of training, test and development set
-    train_set = CFEVERERDataset(train_claims, evidences, True)
-    dev_set = CFEVERERDataset(dev_claims, evidences, False)
-    #test_set = CFEVERERDataset(test_claims, evidences, False)
+    # # Creating instances of training, test and development set
+    # train_set = CFEVERERDataset(train_claims, evidences, True)
+    # dev_set = CFEVERERDataset(dev_claims, evidences, False)
+    # #test_set = CFEVERERDataset(test_claims, evidences, False)
 
-    #Creating intsances of training, test and development dataloaders
-    train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    # #Creating intsances of training, test and development dataloaders
+    # train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    # dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    # #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
-    net = CFEVERERClassifier()
-    #net.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
-    net.cuda(gpu) #Enable gpu support for the model
+    # net = CFEVERERClassifier()
+    # #net.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
+    # net.cuda(gpu) #Enable gpu support for the model
 
-    loss_criterion = nn.BCEWithLogitsLoss()
-    opti = optim.Adam(net.parameters(), lr=2e-5)
+    # loss_criterion = nn.BCEWithLogitsLoss()
+    # opti = optim.Adam(net.parameters(), lr=2e-5)
 
-    # fine-tune the model
-    train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
+    # # fine-tune the model
+    # train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
 
-    # claim_evidences = predict(net, test_loader, gpu)
-    # test_claims = extract_er_result(claim_evidences, test_claims)
+    # # claim_evidences = predict(net, test_loader, gpu)
+    # # test_claims = extract_er_result(claim_evidences, test_claims)
 
     #-------------------------------------------------------------
