@@ -254,8 +254,6 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
         st = time.time()
-
-        df = pd.DataFrame()
         
         for i, (seq, attn_masks, segment_ids, position_ids, labels, claim_ids, evidence_ids) in enumerate(train_loader):
             # Reset/Clear gradients
@@ -276,8 +274,6 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
             # Optimization step, apply the gradients
             opti.step()
 
-            df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "labels": labels.detach().cpu(), "probs": get_probs_from_logits(logits).detach().cpu()})], ignore_index=True)
-
             if i % 100 == 0:
                 acc = get_accuracy_from_logits(logits, labels)
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
@@ -287,7 +283,7 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         print("\nReseting training data...")
         train_set.reset_data()
         train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-        print(f"Training data reset! Time taken: {time.time() - st}.\n")
+        print(f"Training data reset!\n")
         
         f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
         print("\nEpoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
