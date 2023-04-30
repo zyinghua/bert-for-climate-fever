@@ -50,6 +50,9 @@ class CFEVERERDataset(Dataset):
 
     def __len__(self):
         return len(self.data_set)
+    
+    def reset_data(self):
+        self.data_set = unroll_claim_evidences(self.claims, self.evidences, self.is_train, train_sample_ratio, pre_select_evidence_num)
 
     def __getitem__(self, index):
         if self.is_train:
@@ -214,7 +217,7 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         if f1 > best_f1:
             print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
             best_f1 = f1
-            torch.save(net.state_dict(), '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls_{}.dat'.format(ep))
+            torch.save(net.state_dict(), '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
 
 
 def get_accuracy_from_logits(logits, labels):
@@ -343,30 +346,30 @@ if __name__ == '__main__':
 
     #-------------------------------------------------------------
 
-    # # Creating instances of training and development set
-    # # max_len sets the maximum length that a sentence can have,
-    # # any sentence longer than that length is truncated to the max_len size
-    # train_set = CFEVERERDataset(train_claims, evidences, True)
-    # dev_set = CFEVERERDataset(dev_claims, evidences, False)
-    # #test_set = CFEVERERDataset(test_claims, evidences, False)
+    # Creating instances of training and development set
+    # max_len sets the maximum length that a sentence can have,
+    # any sentence longer than that length is truncated to the max_len size
+    train_set = CFEVERERDataset(train_claims, evidences, True)
+    dev_set = CFEVERERDataset(dev_claims, evidences, False)
+    #test_set = CFEVERERDataset(test_claims, evidences, False)
 
-    # #Creating intsances of training and development dataloaders
-    # train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    # dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    # #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    #Creating intsances of training and development dataloaders
+    train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
-    # ver = 0
-    # net = CFEVERERClassifier()
-    # net.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls_{}.dat'.format(ver)))
-    # net.cuda(gpu) #Enable gpu support for the model
+    ver = 0
+    net = CFEVERERClassifier()
+    #net.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls_{}.dat'.format(ver)))
+    net.cuda(gpu) #Enable gpu support for the model
 
-    # loss_criterion = nn.BCEWithLogitsLoss()
-    # opti = optim.Adam(net.parameters(), lr=2e-5)
+    loss_criterion = nn.BCEWithLogitsLoss()
+    opti = optim.Adam(net.parameters(), lr=2e-5)
 
-    # # fine-tune the model
-    # train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
+    # fine-tune the model
+    train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
 
-    # # claim_evidences = predict(net, test_loader, gpu)
-    # # test_claims = extract_er_result(claim_evidences, test_claims)
+    # claim_evidences = predict(net, test_loader, gpu)
+    # test_claims = extract_er_result(claim_evidences, test_claims)
 
     #-------------------------------------------------------------
