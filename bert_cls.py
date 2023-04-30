@@ -183,14 +183,14 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
 
 def get_accuracy_from_logits(logits, labels):
     probs = F.softmax(logits, dim=-1)
-    predicted_classes = torch.argmax(probs)
+    predicted_classes = torch.argmax(probs, dim=1)
     acc = (predicted_classes.squeeze() == labels).float().mean()
     return acc
 
 
 def get_predictions_from_logits(logits):
     probs = F.softmax(logits, dim=-1)
-    predicted_classes = torch.argmax(probs)
+    predicted_classes = torch.argmax(probs, dim=1)
     return predicted_classes.squeeze()
 
 
@@ -256,7 +256,7 @@ if __name__ == '__main__':
     train_claims, dev_claims, test_claims, evidences = load_data()
 
     # net = CFEVERLabelClassifier()
-    # net.cuda(gpu) #Enable gpu support for the model
+    # #net.cuda(gpu) #Enable gpu support for the model
 
     # loss_criterion = nn.CrossEntropyLoss()
     # opti = optim.Adam(net.parameters(), lr=2e-5)
