@@ -346,21 +346,18 @@ if __name__ == '__main__':
 
     #-------------------------------------------------------------
 
-    # Creating instances of training and development set
-    # max_len sets the maximum length that a sentence can have,
-    # any sentence longer than that length is truncated to the max_len size
+    # Creating instances of training, test and development set
     train_set = CFEVERERDataset(train_claims, evidences, True)
     dev_set = CFEVERERDataset(dev_claims, evidences, False)
     #test_set = CFEVERERDataset(test_claims, evidences, False)
 
-    #Creating intsances of training and development dataloaders
+    #Creating intsances of training, test and development dataloaders
     train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
     dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
     #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
-    ver = 0
     net = CFEVERERClassifier()
-    #net.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls_{}.dat'.format(ver)))
+    #net.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
     net.cuda(gpu) #Enable gpu support for the model
 
     loss_criterion = nn.BCEWithLogitsLoss()
