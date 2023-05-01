@@ -1,10 +1,14 @@
 import pandas as pd
+import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from dataset_loader import load_data
 
 def tfidf_cos_baseline(claims, evidences, evidence_select_num=10):
-    recall, precision = 0.0, 0.0
+    """
+    Selects the K most cosine similar evidences based on TF-IDF.
+    """
+    fscores, recalls, precisions = [], [], []
     claim_evidences = {}
 
     vectorizer = TfidfVectorizer(stop_words='english')
@@ -18,19 +22,22 @@ def tfidf_cos_baseline(claims, evidences, evidence_select_num=10):
     
         df = pd.DataFrame({"evidences": evidences.keys(), "similarity": cos_sims}).sort_values(by=['similarity'], ascending=False)
         claim_evidences[c] = df.iloc[:evidence_select_num]["evidences"].tolist()
-
+    
     for claim_id, evidences in claim_evidences.items():
         e_true = claims[claim_id]['evidences']
-        recall += len([e for e in evidences if e in e_true]) / len(e_true)
-        precision += len([e for e in evidences if e in e_true]) / len(evidences)
+        recall = len([e for e in evidences if e in e_true]) / len(e_true)
+        precision = len([e for e in evidences if e in e_true]) / len(evidences)
+        fscore = 2 * (precision * recall) / (precision + recall) if precision + recall != 0 else 0.0
 
-    recall /= len(claim_evidences)
-    precision /= len(claim_evidences)
+        fscores.append(fscore)
+        precisions.append(precision)
+        recalls.append(recall)
 
-    if recall + precision == 0.0:
-        return 0.0, 0.0, 0.0
-    else:
-        return 2 * (precision * recall) / (precision + recall), recall, precision  # F1 Score, recall, precision
+    mean_f = np.mean(fscores if len(fscores) > 0 else [0.0])
+    mean_recall = np.mean(recalls if len(recalls) > 0 else [0.0])
+    mean_precision = np.mean(precisions if len(precisions) > 0 else [0.0])
+
+    return mean_f, mean_recall, mean_precision  # F1 Score, recall, precision
 
 
 if __name__ == '__main__':
