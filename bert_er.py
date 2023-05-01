@@ -67,7 +67,7 @@ class CFEVERERTrainDataset(Dataset):
         seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
                 'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
     
-        return seq, attn_masks, segment_ids, position_ids, label, claim_id, evidence_id
+        return seq, attn_masks, segment_ids, position_ids, label
 
 
 class CFEVERERTestDataset(Dataset):
@@ -212,7 +212,7 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         net.train()  # Good practice to set the mode of the model
         st = time.time()
         
-        for i, (seq, attn_masks, segment_ids, position_ids, labels, claim_ids, evidence_ids) in enumerate(train_loader):
+        for i, (seq, attn_masks, segment_ids, position_ids, labels) in enumerate(train_loader):
             # Reset/Clear gradients
             opti.zero_grad()
 

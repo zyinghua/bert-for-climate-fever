@@ -176,9 +176,9 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
                 st = time.time()
 
         dev_acc = evaluate_dev(net, dev_loader, dev_claims, gpu)
-        print("Epoch {} complete! Development Accuracy on claim labels: {}.".format(ep, dev_acc))
+        print("\nEpoch {} complete! Development Accuracy on dev claim labels: {}.".format(ep, dev_acc))
         if dev_acc > best_acc:
-            print("Best development accuracy improved from {} to {}, saving model...".format(best_acc, dev_acc))
+            print("Best development accuracy improved from {} to {}, saving model...\n".format(best_acc, dev_acc))
             best_acc = dev_acc
             torch.save(net.state_dict(), '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverlabelcls.dat')
 
