@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 import numpy as np
 import torch
@@ -247,6 +248,16 @@ def evaluate_dev(net, dataloader, dev_claims, gpu):
             correct_labels += 1
     
     return correct_labels / len(dev_claims)  # claim label accuracy
+
+
+def extract_claim_labels(test_claims, claim_labels):
+    for claim in claim_labels:
+        test_claims[claim]["claim_label"] = claim_labels[claim]
+    
+    with open('/content/drive/MyDrive/Colab Notebooks/Assignment3/test_claims_preds.json', 'w') as f:
+        json.dump(test_claims, f)
+    
+    return test_claims
 
 
 if __name__ == '__main__':

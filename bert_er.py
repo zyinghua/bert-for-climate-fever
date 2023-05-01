@@ -329,7 +329,7 @@ def select_evi_candidates_df(df, threshold, max_candidates):
 
     return df
 
-def predict(net, dataloader, gpu, threshold=evidence_selection_threshold, max_candidates=max_evi):
+def predict_evi(net, dataloader, gpu, threshold=evidence_selection_threshold, max_candidates=max_evi):
     net.eval()
 
     claim_evidences = defaultdict(list)
@@ -368,8 +368,7 @@ def extract_er_result(claim_evidences, claims, filename=er_filename):
 
 
 def evaluate(net, dataloader, dev_claims, gpu):
-    claim_evidences = predict(net, dataloader, gpu)
-    extract_er_result(claim_evidences, dev_claims)
+    claim_evidences = predict_evi(net, dataloader, gpu)
 
     fscores, recalls, precisions = [], [], []
 
@@ -391,7 +390,7 @@ def evaluate(net, dataloader, dev_claims, gpu):
 
 
 def er_pipeline():
-    train_claims, dev_claims, test_claims, evidences = load_data()
+    train_claims, dev_claims, _, evidences = load_data()
 
     #-------------------------------------------------------------
 
@@ -410,19 +409,16 @@ def er_pipeline():
     opti = optim.Adam(net_er.parameters(), lr=2e-5)
 
     # First phrase: fine-tune the model on random samples
-    train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
+    train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch-2)
 
     # Second phrase: fine-tune the model on hnm with few random samples
     train_set.reset_data_hnm(hnm(net_er, train_claims, evidences, gpu))
+    train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
     train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, hnm=True)
-    #net_er.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
 
-    # test_set = CFEVERERTestDataset(test_claims, evidences)
-    # test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    net_er.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat'))
 
-    # claim_evidences = predict(net_er, test_loader, gpu)
-    # test_claims = extract_er_result(claim_evidences, test_claims)
-
+    return net_er
     #-------------------------------------------------------------
 
 
