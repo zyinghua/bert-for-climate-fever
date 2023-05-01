@@ -261,21 +261,18 @@ def extract_claim_labels(test_claims, claim_labels):
 
 
 if __name__ == '__main__':
-    train_claims, dev_claims, test_claims, evidences = load_data()
+    # train_claims, dev_claims, _, evidences = load_data()
 
     # net_clc = CFEVERLabelClassifier()
     # #net_clc.cuda(gpu) #Enable gpu support for the model
 
     # loss_criterion = nn.CrossEntropyLoss()
-    # opti = optim.Adam(net_clc.parameters(), lr=opti_lr_clc)
+    # opti_clc = optim.Adam(net_clc.parameters(), lr=opti_lr_clc)
 
     # train_set = CFEVERLabelTrainDataset(train_claims, evidences)
     # dev_set = CFEVERLabelTestDataset(dev_claims, evidences)
-    # #test_set = CFEVERERLabelTestDataset(test_claims, evidences)
 
     # train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
     # dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    # #test_loader = DataLoader(test_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
-
-    # train_claim_cls(net_clc, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu)
+    # train_claim_cls(net_clc, loss_criterion, opti_clc, train_loader, dev_loader, dev_claims, gpu)

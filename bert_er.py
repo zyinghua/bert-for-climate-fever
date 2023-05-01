@@ -350,10 +350,10 @@ def er_pipeline():
     net_er.cuda(gpu) #Enable gpu support for the model
 
     loss_criterion = nn.BCEWithLogitsLoss()
-    opti = optim.Adam(net_er.parameters(), lr=2e-5)
+    opti_er = optim.Adam(net_er.parameters(), lr=2e-5)
 
     # Fine-tune the model
-    train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
+    train_evi_retrival(net_er, loss_criterion, opti_er, train_loader, dev_loader, train_set, dev_claims, gpu)
 
     net_er.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat'))
 
