@@ -254,7 +254,7 @@ def extract_claim_labels(test_claims, claim_labels):
     for claim in claim_labels:
         test_claims[claim]["claim_label"] = claim_labels[claim]
     
-    with open('/content/drive/MyDrive/Colab Notebooks/Assignment3/test_claims_preds.json', 'w') as f:
+    with open('/content/drive/MyDrive/Colab Notebooks/Assignment3/test-claims-predictions.json', 'w') as f:
         json.dump(test_claims, f)
     
     return test_claims

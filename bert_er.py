@@ -56,9 +56,6 @@ class CFEVERERTrainDataset(Dataset):
     def reset_data_random(self):
         self.data_set = unroll_train_claim_evidences(self.claims, self.evidences, self.sample_ratio)
 
-    def reset_data_hnm(self, claim_hard_negatives):
-        self.data_set = unroll_train_claim_evidences_with_hnm(self.claims, self.evidences, claim_hard_negatives)
-
     def __getitem__(self, index):
         claim_id, evidence_id, label = self.data_set[index]
 
@@ -174,57 +171,6 @@ def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, 
     return potential_relevant_evidences
 
 
-def unroll_train_claim_evidences_with_hnm(claims, evidences_, claim_hard_negatives):
-    st = time.time()
-
-    train_claim_evidence_pairs = []
-
-    for claim in claims:
-        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], 0.5):
-            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
-        
-        for train_evidence_id in claim_hard_negatives[claim]:
-            train_claim_evidence_pairs.append((claim, train_evidence_id, 0))
-
-    random.shuffle(train_claim_evidence_pairs)
-    print(f"Finished unrolling train claim-evidence pairs with hnm in {time.time() - st} seconds.")
-
-    return train_claim_evidence_pairs
-
-
-def extract_hard_negatives(df, train_claims):
-    claim_hard_negatives = defaultdict(list)
-
-    df = df.groupby('claim_ids').apply(lambda x: x[~x['evidence_ids'].isin(train_claims[x.name]['evidences'])].nlargest(len(train_claims[x.name]['evidences']), 'probs')).reset_index(drop=True)  # find HNs
-
-    for _, row in df.iterrows():
-        claim_id = row['claim_ids']
-        evidence_id = row['evidence_ids']
-
-        claim_hard_negatives[claim_id].append(evidence_id)
-        
-    return claim_hard_negatives
-
-
-def hnm(net, train_claims, evidences_, gpu):
-    test_train_set = CFEVERERTestDataset(train_claims, evidences_)
-    test_train_loader = DataLoader(test_train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-
-    net.eval()
-
-    df = pd.DataFrame()
-
-    with torch.no_grad():  # suspend grad track, save time and memory
-        for seq, attn_masks, segment_ids, position_ids, claim_ids, evidence_ids in test_train_loader:
-            seq, attn_masks, segment_ids, position_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), position_ids.cuda(gpu)
-            logits = net(seq, attn_masks, segment_ids, position_ids)
-            probs = get_probs_from_logits(logits)
-                
-            df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "probs": probs.cpu()})], ignore_index=True)
-
-    return extract_hard_negatives(df, train_claims)
-
-
 class CFEVERERClassifier(nn.Module):
     def __init__(self):
         super(CFEVERERClassifier, self).__init__()
@@ -259,7 +205,7 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch, hnm=False):
+def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch):
     best_f1 = 0
     
     for ep in range(max_eps):
@@ -290,20 +236,18 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
         
-        if not hnm:
-            st = time.time()
-            print("\nReseting training data...")
-            train_set.reset_data_random()
-            train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-            print(f"Training data reset!\n")
+        st = time.time()
+        print("\nReseting training data...")
+        train_set.reset_data_random()
+        train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+        print(f"Training data reset!\n")
         
-        if hnm:  # Enable dev eval if hnm is integrated
-            f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
-            print("\nEpoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
-            if f1 > best_f1:
-                print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
-                best_f1 = f1
-                torch.save(net.state_dict(), '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
+        f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
+        print("\nEpoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
+        if f1 > best_f1:
+            print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
+            best_f1 = f1
+            torch.save(net.state_dict(), '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat')
 
 
 def get_accuracy_from_logits(logits, labels):
@@ -408,13 +352,8 @@ def er_pipeline():
     loss_criterion = nn.BCEWithLogitsLoss()
     opti = optim.Adam(net_er.parameters(), lr=2e-5)
 
-    # First phrase: fine-tune the model on random samples
-    train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch-2)
-
-    # Second phrase: fine-tune the model on hnm with few random samples
-    train_set.reset_data_hnm(hnm(net_er, train_claims, evidences, gpu))
-    train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, hnm=True)
+    # Fine-tune the model
+    train_evi_retrival(net_er, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu)
 
     net_er.load_state_dict(torch.load('/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat'))
 
