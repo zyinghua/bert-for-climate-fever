@@ -32,7 +32,6 @@ loader_batch_size = 24
 loader_worker_num = 2
 num_epoch = 7
 evidence_selection_threshold = 0.7
-hnm_threshold = 0.01
 max_evi = 5
 opti_lr = 2e-5
 # ----------------------------------------------
@@ -55,6 +54,9 @@ class CFEVERERTrainDataset(Dataset):
     
     def reset_data_random(self):
         self.data_set = unroll_train_claim_evidences(self.claims, self.evidences, self.sample_ratio)
+    
+    def reset_data_hne(self, claim_hard_negative_evidences):
+        self.data_set = unroll_train_claim_evidences_with_hne(self.claims, self.evidences, claim_hard_negative_evidences)
 
     def __getitem__(self, index):
         claim_id, evidence_id, label = self.data_set[index]
@@ -64,10 +66,10 @@ class CFEVERERTrainDataset(Dataset):
                                                               return_tensors='pt', padding='max_length', truncation=True,
                                                               max_length=self.max_len, return_token_type_ids=True)
         
-        seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
-                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
+        seq, attn_masks, segment_ids, = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
+                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
     
-        return seq, attn_masks, segment_ids, position_ids, label
+        return seq, attn_masks, segment_ids, label
 
 
 class CFEVERERTestDataset(Dataset):
@@ -92,10 +94,10 @@ class CFEVERERTestDataset(Dataset):
                                                               return_tensors='pt', padding='max_length', truncation=True,
                                                               max_length=self.max_len, return_token_type_ids=True)
         
-        seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
-                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
+        seq, attn_masks, segment_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
+                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
     
-        return seq, attn_masks, segment_ids, position_ids, claim_id, evidence_id
+        return seq, attn_masks, segment_ids, claim_id, evidence_id
 
 
 def unroll_train_claim_evidences(claims, evidences_, sample_ratio):
@@ -144,7 +146,7 @@ def generate_train_evidence_samples(evidences_, claim_evidences, sample_ratio):
     samples = claim_evidences.copy()  # evidence ids
 
     # Get negative samples
-    while len(samples) < math.floor(len(claim_evidences) * (sample_ratio + 1)):
+    while len(samples) < math.ceil(len(claim_evidences) * (sample_ratio + 1)):
         neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
         
         if neg_sample not in samples:
@@ -183,17 +185,16 @@ class CFEVERERClassifier(nn.Module):
         # output dimension is 1 because we're working with a binary classification problem - RELEVANT : NOT RELEVANT
         self.cls_layer = nn.Linear(d_bert_base, 1)
 
-    def forward(self, seq, attn_masks, segment_ids, position_ids):
+    def forward(self, seq, attn_masks, segment_ids):
         '''
         Inputs:
             -seq : Tensor of shape [B, T] containing token ids of sequences
             -attn_masks : Tensor of shape [B, T] containing attention masks to be used to avoid contibution of PAD tokens
             -segment_ids : Tensor of shape [B, T] containing token ids of segment embeddings (see BERT paper for more details)
-            -position_ids : Tensor of shape [B, T] containing token ids of position embeddings (see BERT paper for more details)
         '''
         
         # Feeding the input to BERT model to obtain contextualized representations
-        outputs = self.bert(seq, attention_mask=attn_masks, token_type_ids=segment_ids, position_ids=position_ids, return_dict=True)
+        outputs = self.bert(seq, attention_mask=attn_masks, token_type_ids=segment_ids, return_dict=True)
         cont_reps = outputs.last_hidden_state
 
         # Obtaining the representation of [CLS] head (the first token)
@@ -212,15 +213,15 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         net.train()  # Good practice to set the mode of the model
         st = time.time()
         
-        for i, (seq, attn_masks, segment_ids, position_ids, labels) in enumerate(train_loader):
+        for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
             # Reset/Clear gradients
             opti.zero_grad()
 
             # Extracting the tokens ids, attention masks and token type ids
-            seq, attn_masks, segment_ids, position_ids, labels = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), position_ids.cuda(gpu), labels.cuda(gpu)
+            seq, attn_masks, segment_ids, labels = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), labels.cuda(gpu)
 
             # Obtaining the logits from the model
-            logits = net(seq, attn_masks, segment_ids, position_ids)
+            logits = net(seq, attn_masks, segment_ids)
 
             # Computing loss
             loss = loss_criterion(logits.squeeze(-1), labels.float())
@@ -280,9 +281,9 @@ def predict_evi(net, dataloader, gpu, threshold=evidence_selection_threshold, ma
     df = pd.DataFrame()
 
     with torch.no_grad():  # suspend grad track, save time and memory
-        for seq, attn_masks, segment_ids, position_ids, claim_ids, evidence_ids in dataloader:
-            seq, attn_masks, segment_ids, position_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), position_ids.cuda(gpu)
-            logits = net(seq, attn_masks, segment_ids, position_ids)
+        for seq, attn_masks, segment_ids, claim_ids, evidence_ids in dataloader:
+            seq, attn_masks, segment_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu)
+            logits = net(seq, attn_masks, segment_ids)
             probs = get_probs_from_logits(logits)
             
             df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "probs": probs.cpu()})], ignore_index=True)
@@ -359,6 +360,85 @@ def er_pipeline():
 
     return net_er
     #-------------------------------------------------------------
+
+
+def get_preds_from_logits(logits):
+    probs = torch.sigmoid(logits.unsqueeze(-1))
+    preds = (probs > 0.5).long()
+    return preds.squeeze()
+
+
+class CFEVERERHNMDataset(Dataset):
+    def __init__(self, claim, evidences_, max_len=input_seq_max_len):
+        self.data_set = [e for e in evidences_ if e not in claim['evidences']]  # get all negative samples
+        self.max_len = max_len
+        self.claim = claim
+        self.evidences = evidences_
+        self.target_hn_num = len(claim['evidences'])  # number of hard negative evidences to be selected
+
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+    def __len__(self):
+        return len(self.data_set)
+
+    def __getitem__(self, index):
+        evidence_id = self.data_set[index]
+
+        # Preprocessing the text to be suitable for BERT
+        claim_evidence_in_tokens = self.tokenizer.encode_plus(self.claim['claim_text'], self.evidences[evidence_id], 
+                                                              return_tensors='pt', padding='max_length', truncation=True,
+                                                              max_length=self.max_len, return_token_type_ids=True)
+        
+        seq, attn_masks, segment_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
+                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
+    
+        return seq, attn_masks, segment_ids, evidence_id
+
+
+def hnm(net, train_claims, evidences_, gpu):
+    net.eval()
+
+    claim_hard_negative_evidences = defaultdict(list)
+    
+    for train_claim in train_claims:
+        test_train_set = CFEVERERHNMDataset(train_claims[train_claim], evidences_)
+        test_train_loader = DataLoader(test_train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+
+        with torch.no_grad():  # suspend grad track, save time and memory
+            for seq, attn_masks, segment_ids, evidence_ids in test_train_loader:
+                seq, attn_masks, segment_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu)
+                logits = net(seq, attn_masks, segment_ids)
+                preds = get_preds_from_logits(logits)
+
+                indices = np.where(preds.cpu().numpy() == 1)[0]
+                i = 0
+
+                while len(claim_hard_negative_evidences[train_claim]) < test_train_set.target_hn_num and i < len(indices):
+                    claim_hard_negative_evidences[train_claim].append(evidence_ids[i].item())
+                    i += 1
+
+                if len(claim_hard_negative_evidences[train_claim]) == test_train_set.target_hn_num:
+                    break
+
+    return claim_hard_negative_evidences
+
+
+def unroll_train_claim_evidences_with_hne(claims, evidences_, claim_hard_negative_evidences, hne_sample_ratio=0.5):
+    st = time.time()
+
+    train_claim_evidence_pairs = []
+
+    for claim in claims:
+        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], hne_sample_ratio):
+            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
+
+        for train_evidence_id in claim_hard_negative_evidences[claim]:
+            train_claim_evidence_pairs.append((claim, train_evidence_id, 0))
+
+    random.shuffle(train_claim_evidence_pairs)
+    print(f"Finished unrolling train claim-evidence pairs with hne in {time.time() - st} seconds.")
+
+    return train_claim_evidence_pairs
 
 
 if __name__ == '__main__':
