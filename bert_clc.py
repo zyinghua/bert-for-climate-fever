@@ -50,10 +50,10 @@ class CFEVERLabelTrainDataset(Dataset):
                                                               return_tensors='pt', padding='max_length', truncation=True,
                                                               max_length=self.max_len, return_token_type_ids=True)
         
-        seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
-                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
+        seq, attn_masks, segment_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
+                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
     
-        return seq, attn_masks, segment_ids, position_ids, label
+        return seq, attn_masks, segment_ids, label
 
 
 def unroll_train_claim_evidence_pairs(claims):
@@ -94,10 +94,10 @@ class CFEVERLabelTestDataset(Dataset):
                                                               return_tensors='pt', padding='max_length', truncation=True,
                                                               max_length=self.max_len, return_token_type_ids=True)
         
-        seq, attn_masks, segment_ids, position_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
-                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0), torch.tensor([i+1 for i in range(self.max_len)])
+        seq, attn_masks, segment_ids = claim_evidence_in_tokens['input_ids'].squeeze(0), claim_evidence_in_tokens[
+                'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
     
-        return seq, attn_masks, segment_ids, position_ids, claim_id
+        return seq, attn_masks, segment_ids, claim_id
 
 
 def unroll_test_claim_evidence_pairs(claims):
@@ -122,17 +122,16 @@ class CFEVERLabelClassifier(nn.Module):
         # output dimension is 1 because we're working with a binary classification problem - RELEVANT : NOT RELEVANT
         self.cls_layer = nn.Linear(d_bert_base, num_of_classes)
 
-    def forward(self, seq, attn_masks, segment_ids, position_ids):
+    def forward(self, seq, attn_masks, segment_ids):
         '''
         Inputs:
             -seq : Tensor of shape [B, T] containing token ids of sequences
             -attn_masks : Tensor of shape [B, T] containing attention masks to be used to avoid contibution of PAD tokens
             -segment_ids : Tensor of shape [B, T] containing token ids of segment embeddings (see BERT paper for more details)
-            -position_ids : Tensor of shape [B, T] containing token ids of position embeddings (see BERT paper for more details)
         '''
         
         # Feeding the input to BERT model to obtain contextualized representations
-        outputs = self.bert(seq, attention_mask=attn_masks, token_type_ids=segment_ids, position_ids=position_ids, return_dict=True)
+        outputs = self.bert(seq, attention_mask=attn_masks, token_type_ids=segment_ids, return_dict=True)
         cont_reps = outputs.last_hidden_state
 
         # Obtaining the representation of [CLS] head (the first token)
@@ -151,15 +150,15 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
         
-        for i, (seq, attn_masks, segment_ids, position_ids, labels) in enumerate(train_loader):
+        for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
             # Reset/Clear gradients
             opti.zero_grad()
 
             # Extracting the tokens ids, attention masks and token type ids
-            seq, attn_masks, segment_ids, position_ids, labels = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), position_ids.cuda(gpu), labels.cuda(gpu)
+            seq, attn_masks, segment_ids, labels = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), labels.cuda(gpu)
 
             # Obtaining the logits from the model
-            logits = net(seq, attn_masks, segment_ids, position_ids)
+            logits = net(seq, attn_masks, segment_ids)
 
             # Computing loss
             loss = loss_criterion(logits, labels)
@@ -203,9 +202,9 @@ def predict_pairs(net, dataloader, gpu):
     df = pd.DataFrame()
 
     with torch.no_grad():
-        for seq, attn_masks, segment_ids, position_ids, claim_ids in dataloader:
-            seq, attn_masks, segment_ids, position_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), position_ids.cuda(gpu)
-            logits = net(seq, attn_masks, segment_ids, position_ids)
+        for seq, attn_masks, segment_ids, claim_ids in dataloader:
+            seq, attn_masks, segment_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu)
+            logits = net(seq, attn_masks, segment_ids)
             preds = get_predictions_from_logits(logits)
 
             df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "preds": preds.cpu()})], ignore_index=True)
