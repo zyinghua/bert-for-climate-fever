@@ -1,3 +1,5 @@
+# This file is used to load the datasets from the json files.
+
 import json
 
 train_path = '../project-data/train-claims.json'

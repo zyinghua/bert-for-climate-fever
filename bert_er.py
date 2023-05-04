@@ -1,3 +1,5 @@
+# This file contains all the code for the Evidence Retrival task. Data -> Training -> ER Model
+
 import json
 import math
 import pandas as pd

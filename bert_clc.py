@@ -1,3 +1,5 @@
+# This file contains the code for the Claim Label Classification task: Data -> Training -> Classification Model
+
 import json
 import pandas as pd
 import numpy as np

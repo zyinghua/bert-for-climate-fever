@@ -1,10 +1,13 @@
+# This file contains the code of a baseline model for the evidence retrival task.
+
 import pandas as pd
 import numpy as np
+from collections import Counter
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from dataset_loader import load_data
 
-def tfidf_cos_baseline(claims, evidences, evidence_select_num=10):
+def tfidf_cos_er_baseline(claims, evidences, evidence_select_num=10):
     """
     Selects the K most cosine similar evidences based on TF-IDF.
     """
@@ -40,12 +43,27 @@ def tfidf_cos_baseline(claims, evidences, evidence_select_num=10):
     return mean_f, mean_recall, mean_precision  # F1 Score, recall, precision
 
 
-if __name__ == '__main__':
-    train_claims, dev_claims, test_claims, evidences = load_data()
-
-    f1, recall, precision = tfidf_cos_baseline(dev_claims, evidences)
+def run_er_baseline(dev_claims, evidences):
+    f1, recall, precision = tfidf_cos_er_baseline(dev_claims, evidences)
     print("------Evidence Retrival Baseline Performance------")
     print(f"F1-Score: {f1}")
     print(f"Recall-Score: {recall}")
     print(f"Precision-Score: {precision}")
     print("--------------------------------------------------")
+
+
+def zero_r_label_cls_baseline(train_claims, dev_claims):
+    acc = 0
+    majority_label = Counter([train_claims[c]["claim_label"] for c in train_claims]).most_common(1)[0][0]
+
+    for c in dev_claims:
+        if dev_claims[c]['claim_label'] == majority_label:
+            acc += 1
+    
+    return acc / len(dev_claims)
+
+
+if __name__ == '__main__':
+    train_claims, dev_claims, test_claims, evidences = load_data()
+
+    print(zero_r_label_cls_baseline(train_claims, dev_claims))

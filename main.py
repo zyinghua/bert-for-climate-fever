@@ -1,3 +1,5 @@
+# This file contains the code to run the pipeline of the Climate FEVER system.
+
 from bert_er import extract_er_result, predict_evi, er_pipeline, CFEVERERTestDataset
 from bert_clc import extract_claim_evi_labels, decide_claim_labels, clc_pipeline, CFEVERLabelTestDataset
 from dataset_loader import load_data
