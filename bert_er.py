@@ -8,7 +8,7 @@ import random
 import transformers
 from transformers import BertTokenizer
 from transformers import BertModel
-from collections import Counter, defaultdict
+from collections import defaultdict
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 from transformers import AdamW
@@ -16,14 +16,13 @@ import time
 import copy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from dataset_loader import load_data
 
 # !pip install torch torchvision transformers
 # transformers.logging.set_verbosity_error()
 
 random.seed(42)
 evidence_key_prefix = 'evidence-'
-er_filename = "/content/drive/MyDrive/Colab Notebooks/Assignment3/evidence-retrival-only-results.json"
+er_result_filename = "/content/drive/MyDrive/Colab Notebooks/Assignment3/evidence-retrival-only-results.json"
 er_model_params_filename = '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat'
 claim_hard_negatives_filename = '/content/drive/MyDrive/Colab Notebooks/Assignment3/claim-hard-negative-evidences.json'
 
@@ -361,7 +360,7 @@ def evaluate(net, dataloader, dev_claims, gpu):
     return mean_f, mean_recall, mean_precision  # F1 Score, recall, precision
 
 
-def extract_er_result(claim_evidences, claims, filename=er_filename):
+def extract_er_result(claim_evidences, claims, filename=er_result_filename):
     """
     Extract the evidences from the claim_evidences dict and
     save the result to a json file. This step only considers
@@ -533,14 +532,14 @@ def train_evi_retrival_hne(net, loss_criterion, opti, train_loader, dev_loader, 
                 print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
                 best_f1 = f1
                 torch.save(net.state_dict(), er_model_params_filename)
+            else:
+                print()
 
 
-def er_pipeline():
-    train_claims, dev_claims, _, evidences = load_data()
-
+def er_pipeline(train_claims, dev_claims, evidences):
     #-------------------------------------------------------------
     net_er = CFEVERERClassifier()
-    net_er.cuda(gpu) #Enable gpu support for the model
+    net_er.cuda(gpu) # Enable gpu support for the model
 
     loss_criterion = nn.BCEWithLogitsLoss()
     opti_er = AdamW(net_er.parameters(), lr=opti_lr_er, weight_decay=0.15) #optim.Adam(net_er.parameters(), lr=opti_lr_er)
@@ -562,10 +561,10 @@ def er_pipeline():
 
     train_evi_retrival_hne(net_er, loss_criterion, opti_er, train_loader, dev_loader, train_set, claim_hard_negative_evidences, dev_claims, gpu)
 
+    net_er.load_state_dict(torch.load(er_model_params_filename))
     return net_er
     #-------------------------------------------------------------
 
 
 if __name__ == '__main__':
-    random.seed(42)
-    er_pipeline()
+    pass
