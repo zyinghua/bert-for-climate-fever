@@ -2,6 +2,10 @@ from bert_er import extract_er_result, predict_evi, er_pipeline, CFEVERERTestDat
 from bert_clc import extract_claim_evi_labels, decide_claim_labels, clc_pipeline, CFEVERLabelTestDataset
 from dataset_loader import load_data
 from torch.utils.data import DataLoader
+import transformers
+
+# !pip install torch torchvision transformers
+# transformers.logging.set_verbosity_error()
 
 # ----------------- Prediction -----------------
 loader_batch_size = 24

@@ -5,7 +5,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import random
-import transformers
 from transformers import BertTokenizer
 from transformers import BertModel
 from collections import defaultdict
@@ -16,9 +15,6 @@ import time
 import copy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
-# !pip install torch torchvision transformers
-# transformers.logging.set_verbosity_error()
 
 random.seed(42)
 evidence_key_prefix = 'evidence-'
