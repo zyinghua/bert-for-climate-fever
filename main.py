@@ -7,13 +7,15 @@ import transformers
 # !pip install torch torchvision transformers
 # transformers.logging.set_verbosity_error()
 
+path_prefix = '/content/drive/MyDrive/Colab Notebooks/Assignment3/'
+
 # ----------------- Prediction -----------------
 loader_batch_size = 24
 loader_worker_num = 2
 gpu = 0
 # ----------------------------------------------
 
-output_filename = '/content/drive/MyDrive/Colab Notebooks/Assignment3/test-claims-predictions.json'
+output_filename = path_prefix + 'test-claims-predictions.json'
 
 def CFEVER_main():
     train_claims, dev_claims, test_claims, evidences = load_data()

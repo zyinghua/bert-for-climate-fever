@@ -9,11 +9,11 @@ from collections import Counter, defaultdict
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import time
-from dataset_loader import load_data
 from torch.nn import functional as F
+from main import path_prefix
 
 
-clc_model_params_filename = '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverlabelcls.dat'
+clc_model_params_filename = path_prefix + 'cfeverlabelcls.dat'
 
 # ----------Hyperparameters of the entire pipeline----------
 # --------------Claim Label Classification--------------

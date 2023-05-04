@@ -15,12 +15,13 @@ import time
 import copy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from main import path_prefix
 
 random.seed(42)
 evidence_key_prefix = 'evidence-'
-er_result_filename = "/content/drive/MyDrive/Colab Notebooks/Assignment3/evidence-retrival-only-results.json"
-er_model_params_filename = '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverercls.dat'
-claim_hard_negatives_filename = '/content/drive/MyDrive/Colab Notebooks/Assignment3/claim-hard-negative-evidences.json'
+er_result_filename = path_prefix + "evidence-retrival-only-results.json"
+er_model_params_filename = path_prefix + 'cfeverercls.dat'
+claim_hard_negatives_filename = path_prefix + 'claim-hard-negative-evidences.json'
 
 # ----------Hyperparameters of the entire pipeline----------
 # --------------Evidence Retrival--------------
