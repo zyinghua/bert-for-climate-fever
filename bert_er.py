@@ -483,34 +483,6 @@ def unroll_train_claim_evidences_with_hne(claims, evidences_, claim_hard_negativ
 
     return train_claim_evidence_pairs
 
-    # st = time.time()
-
-    # train_claim_evidence_pairs = []
-
-    # for claim in claims:
-    #     samples = claim_hard_negative_evidences[claim].copy()
-
-    #     while len(samples) < len(claim_hard_negative_evidences[claim]) * (sample_ratio + 1):
-    #         random_neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
-            
-    #         if (random_neg_sample not in samples) and (random_neg_sample not in claims[claim]['evidences']):
-    #             samples.append(random_neg_sample)
-        
-    #     # randomly select half of the negative samples
-    #     samples = random.sample(samples, len(samples) // 2)
-
-    #     for claim_evidence in claims[claim]['evidences']:
-    #         samples.append(claim_evidence)
-        
-    #     samples_with_labels = list(zip([claim for _ in range(len(samples))], samples, [0] * (len(samples) - len(claims[claim]['evidences'])) + [1] * len(claims[claim]['evidences'])))
-
-    #     train_claim_evidence_pairs.extend(samples_with_labels)
-
-    # random.shuffle(train_claim_evidence_pairs)
-    # print(f"Finished unrolling train claim-evidence pairs with hne in {time.time() - st} seconds.")
-
-    # return train_claim_evidence_pairs
-
 
 def er_pipeline(train_claims, dev_claims, evidences):
     #-------------------------------------------------------------
