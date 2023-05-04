@@ -32,12 +32,14 @@ pre_select_evidence_num = 1000
 loader_batch_size = 24
 loader_worker_num = 2
 num_epoch_pre = 5
-num_epoch_post = 15
+num_epoch_post = 12
 hnm_threshold = 0.7
 hnm_batch_size = 12
 evidence_selection_threshold = 0.9
 max_evi = 5
 opti_lr_er = 2e-7
+grad_step_period_pre = 1
+grad_step_period_hne = 2
 # ----------------------------------------------
 
 
@@ -56,7 +58,7 @@ class CFEVERERTrainDataset(Dataset):
     def __len__(self):
         return len(self.data_set)
     
-    def reset_data(self):
+    def reset_data_random(self):
         self.data_set = unroll_train_claim_evidences(self.claims, self.evidences, self.sample_ratio)
 
     def reset_data_hne(self, claim_hard_negative_evidences):
@@ -229,17 +231,15 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps=num_epoch_pre):
+def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps, grad_step_period, claim_hard_negative_evidences=None):
     best_f1 = 0
     
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
         st = time.time()
+        opti.zero_grad()
         
         for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
-            # Reset/Clear gradients
-            opti.zero_grad()
-
             # Extracting the tokens ids, attention masks and token type ids
             seq, attn_masks, segment_ids, labels = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), labels.cuda(gpu)
 
@@ -252,27 +252,38 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
             # Backpropagating the gradients, account for gradients
             loss.backward()
 
-            # Optimization step, apply the gradients
-            opti.step()
+            if (i + 1) % grad_step_period == 0:
+                # Optimization step, apply the gradients
+                opti.step()
+
+                # Reset/Clear gradients
+                opti.zero_grad()
 
             if i % 100 == 0:
                 acc = get_accuracy_from_logits(logits, labels)
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
         
-        st = time.time()
         print("\nReseting training data...")
-        train_set.reset_data()
+        if claim_hard_negative_evidences is not None:
+            train_set.reset_data_hne(claim_hard_negative_evidences)
+        else:
+            train_set.reset_data_random()
+
         train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
         print(f"Training data reset!\n")
         
-        if ep > 3:
-            f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
-            print("\nEpoch {} complete! Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, f1, recall, precision))
-            if f1 > best_f1:
-                print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
-                best_f1 = f1
-                torch.save(net.state_dict(), er_model_params_filename)
+        dev_st = time.time()
+        print("Evaluating on the dev set... (This might take a while)")
+        f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
+        print("\nEpoch {} complete in {} seconds!\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}".format(ep, time.time() - dev_st, f1, recall, precision))
+        
+        if f1 > best_f1:
+            print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
+            best_f1 = f1
+            torch.save(net.state_dict(), er_model_params_filename)
+        else:
+            print()
 
 
 def get_accuracy_from_logits(logits, labels):
@@ -451,85 +462,50 @@ def hnm(net, train_claims, evidences_, gpu, hnm_threshold=hnm_threshold, hnm_bat
     return claim_hard_negative_evidences
 
 
-def unroll_train_claim_evidences_with_hne(claims, evidences_, claim_hard_negative_evidences, sample_ratio=1):
+def unroll_train_claim_evidences_with_hne(claims, evidences_, claim_hard_negative_evidences, hne_sample_ratio=0.5, sample_ratio=1):
     st = time.time()
 
     train_claim_evidence_pairs = []
 
     for claim in claims:
-        samples = claim_hard_negative_evidences[claim].copy()
+        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], hne_sample_ratio):
+            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
 
-        while len(samples) < len(claim_hard_negative_evidences[claim]) * (sample_ratio + 1):
-            random_neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
-            
-            if (random_neg_sample not in samples) and (random_neg_sample not in claims[claim]['evidences']):
-                samples.append(random_neg_sample)
-        
-        # randomly select half of the negative samples
-        samples = random.sample(samples, len(samples) // 2)
-
-        for claim_evidence in claims[claim]['evidences']:
-            samples.append(claim_evidence)
-        
-        samples_with_labels = list(zip([claim for _ in range(len(samples))], samples, [0] * (len(samples) - len(claims[claim]['evidences'])) + [1] * len(claims[claim]['evidences'])))
-
-        train_claim_evidence_pairs.extend(samples_with_labels)
+        for train_evidence_id in claim_hard_negative_evidences[claim]:
+            train_claim_evidence_pairs.append((claim, train_evidence_id, 0))
 
     random.shuffle(train_claim_evidence_pairs)
     print(f"Finished unrolling train claim-evidence pairs with hne in {time.time() - st} seconds.")
 
     return train_claim_evidence_pairs
 
+    # st = time.time()
 
-def train_evi_retrival_hne(net, loss_criterion, opti, train_loader, dev_loader, train_set, claim_hard_negative_evidences, dev_claims, gpu, max_eps=num_epoch_post, grad_step_period=2):
-    best_f1 = 0
-    
-    for ep in range(max_eps):
-        net.train()  # Good practice to set the mode of the model
-        st = time.time()
-        opti.zero_grad()
+    # train_claim_evidence_pairs = []
+
+    # for claim in claims:
+    #     samples = claim_hard_negative_evidences[claim].copy()
+
+    #     while len(samples) < len(claim_hard_negative_evidences[claim]) * (sample_ratio + 1):
+    #         random_neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
+            
+    #         if (random_neg_sample not in samples) and (random_neg_sample not in claims[claim]['evidences']):
+    #             samples.append(random_neg_sample)
         
-        for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
-            # Extracting the tokens ids, attention masks and token type ids
-            seq, attn_masks, segment_ids, labels = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), labels.cuda(gpu)
+    #     # randomly select half of the negative samples
+    #     samples = random.sample(samples, len(samples) // 2)
 
-            # Obtaining the logits from the model
-            logits = net(seq, attn_masks, segment_ids)
-
-            # Computing loss
-            loss = loss_criterion(logits.squeeze(-1), labels.float())
-
-            # Backpropagating the gradients, account for gradients
-            loss.backward()
-
-            if (i + 1) % grad_step_period == 0:
-                # Optimization step, apply the gradients
-                opti.step()
-
-                # Reset/Clear gradients
-                opti.zero_grad()
-
-            if i % 100 == 0:
-                acc = get_accuracy_from_logits(logits, labels)
-                print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
-                st = time.time()
+    #     for claim_evidence in claims[claim]['evidences']:
+    #         samples.append(claim_evidence)
         
-        print("\nReseting training data...")
-        train_set.reset_data_hne(claim_hard_negative_evidences)
-        train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-        print(f"Training data reset!\n")
-        
-        if ep > -1:
-            dev_st = time.time()
-            print("Evaluating on the dev set... (This might take a while)")
-            f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
-            print("\nEpoch {} complete in {} seconds!\n Development F1: {}; Development Recall: {}; Development Precision: {}".format(ep, time.time() - dev_st, f1, recall, precision))
-            if f1 > best_f1:
-                print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
-                best_f1 = f1
-                torch.save(net.state_dict(), er_model_params_filename)
-            else:
-                print()
+    #     samples_with_labels = list(zip([claim for _ in range(len(samples))], samples, [0] * (len(samples) - len(claims[claim]['evidences'])) + [1] * len(claims[claim]['evidences'])))
+
+    #     train_claim_evidence_pairs.extend(samples_with_labels)
+
+    # random.shuffle(train_claim_evidence_pairs)
+    # print(f"Finished unrolling train claim-evidence pairs with hne in {time.time() - st} seconds.")
+
+    # return train_claim_evidence_pairs
 
 
 def er_pipeline(train_claims, dev_claims, evidences):
@@ -548,14 +524,14 @@ def er_pipeline(train_claims, dev_claims, evidences):
     train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
     dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
-    # Fine-tune the model
-    train_evi_retrival(net_er, loss_criterion, opti_er, train_loader, dev_loader, train_set, dev_claims, gpu)
+    # First phrase: pre-train the model on all positive claim-evidence pairs and same number of random negative pairs
+    train_evi_retrival(net_er, loss_criterion, opti_er, train_loader, dev_loader, train_set, dev_claims, gpu, num_epoch_pre, grad_step_period_pre)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))  # load the best model
     claim_hard_negative_evidences = hnm(net_er, train_claims, evidences, gpu)
     # claim_hard_negative_evidences = json.load(open(claim_hard_negatives_filename, 'r'))
 
-    train_evi_retrival_hne(net_er, loss_criterion, opti_er, train_loader, dev_loader, train_set, claim_hard_negative_evidences, dev_claims, gpu)
+    train_evi_retrival(net_er, loss_criterion, opti_er, train_loader, dev_loader, train_set, dev_claims, gpu, num_epoch_post, grad_step_period_hne, claim_hard_negative_evidences=claim_hard_negative_evidences)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))
     return net_er
