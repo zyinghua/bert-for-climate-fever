@@ -13,15 +13,16 @@ from dataset_loader import load_data
 from torch.nn import functional as F
 
 
+clc_model_params_filename = '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverlabelcls.dat'
+
 # ----------Hyperparameters of the entire pipeline----------
 # --------------Claim Label Classification--------------
 d_bert_base = 768
-d_bert_large = 1024
 gpu = 0
-input_seq_max_len = 384
+input_seq_max_len = 256
 loader_batch_size = 24
 loader_worker_num = 2
-num_epoch = 7
+num_epoch = 9
 num_of_classes = 3
 opti_lr_clc = 2e-5
 label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT_ENOUGH_INFO': 2}
@@ -179,7 +180,9 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
         if dev_acc > best_acc:
             print("Best development accuracy improved from {} to {}, saving model...\n".format(best_acc, dev_acc))
             best_acc = dev_acc
-            torch.save(net.state_dict(), '/content/drive/MyDrive/Colab Notebooks/Assignment3/cfeverlabelcls.dat')
+            torch.save(net.state_dict(), clc_model_params_filename)
+        else:
+            print()
 
 
 def get_accuracy_from_logits(logits, labels):
@@ -208,7 +211,6 @@ def predict_pairs(net, dataloader, gpu):
             preds = get_predictions_from_logits(logits)
 
             df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "preds": preds.cpu()})], ignore_index=True)
-
 
     for _, row in df.iterrows():
         claim_id = row['claim_ids']
@@ -252,29 +254,37 @@ def evaluate_dev(net, dataloader, dev_claims, gpu):
     return correct_labels / len(dev_claims)  # claim label accuracy
 
 
-def extract_claim_labels(test_claims, claim_labels):
+def extract_claim_evi_labels(test_claims, claim_labels, output_filename):
     for claim in claim_labels:
         test_claims[claim]["claim_label"] = claim_labels[claim]
     
-    with open('/content/drive/MyDrive/Colab Notebooks/Assignment3/test-claims-predictions.json', 'w') as f:
+    with open(output_filename, 'w') as f:
         json.dump(test_claims, f)
+    
+    print("Final test claims predictions file ready.")
     
     return test_claims
 
 
+def clc_pipeline(train_claims, dev_claims, evidences):
+    net_clc = CFEVERLabelClassifier()
+    net_clc.cuda(gpu) # Enable gpu support for the model
+
+    loss_criterion = nn.CrossEntropyLoss()
+    opti_clc = optim.Adam(net_clc.parameters(), lr=opti_lr_clc)
+
+    train_set = CFEVERLabelTrainDataset(train_claims, evidences)
+    dev_set = CFEVERLabelTestDataset(dev_claims, evidences)
+
+    train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+    dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+
+    train_claim_cls(net_clc, loss_criterion, opti_clc, train_loader, dev_loader, dev_claims, gpu)
+
+    net_clc.load_state_dict(torch.load(clc_model_params_filename))
+
+    return net_clc
+
+
 if __name__ == '__main__':
-    # train_claims, dev_claims, _, evidences = load_data()
-
-    # net_clc = CFEVERLabelClassifier()
-    # #net_clc.cuda(gpu) #Enable gpu support for the model
-
-    # loss_criterion = nn.CrossEntropyLoss()
-    # opti_clc = optim.Adam(net_clc.parameters(), lr=opti_lr_clc)
-
-    # train_set = CFEVERLabelTrainDataset(train_claims, evidences)
-    # dev_set = CFEVERLabelTestDataset(dev_claims, evidences)
-
-    # train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-    # dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-
-    # train_claim_cls(net_clc, loss_criterion, opti_clc, train_loader, dev_loader, dev_claims, gpu)
+    pass
