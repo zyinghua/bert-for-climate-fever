@@ -63,7 +63,15 @@ def zero_r_label_cls_baseline(train_claims, dev_claims):
     return acc / len(dev_claims)
 
 
+def run_label_cls_baseline(train_claims, dev_claims):
+    acc = zero_r_label_cls_baseline(train_claims, dev_claims)
+    print("------Label Classification Baseline Performance------")
+    print(f"Accuracy: {acc}")
+    print("-----------------------------------------------------")
+
+
 if __name__ == '__main__':
     train_claims, dev_claims, test_claims, evidences = load_data()
-
-    print(zero_r_label_cls_baseline(train_claims, dev_claims))
+    
+    run_er_baseline(dev_claims, evidences)
+    run_label_cls_baseline(train_claims, dev_claims)
