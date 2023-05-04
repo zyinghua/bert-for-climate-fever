@@ -38,7 +38,8 @@ hnm_threshold = 0.7
 hnm_batch_size = 12
 evidence_selection_threshold = 0.9
 max_evi = 5
-opti_lr_er = 2e-7
+opti_lr_er_pre = 2e-5
+opti_lr_er_hne = 2e-7
 grad_step_period_pre = 1
 grad_step_period_hne = 2
 # ----------------------------------------------
@@ -515,7 +516,8 @@ def er_pipeline(train_claims, dev_claims, evidences):
     net_er.cuda(gpu) # Enable gpu support for the model
 
     loss_criterion = nn.BCEWithLogitsLoss()
-    opti_er = AdamW(net_er.parameters(), lr=opti_lr_er, weight_decay=0.15) #optim.Adam(net_er.parameters(), lr=opti_lr_er)
+    opti_er_pre = optim.Adam(net_er.parameters(), lr=opti_lr_er_pre)
+    opti_er_hne = AdamW(net_er.parameters(), lr=opti_lr_er_hne, weight_decay=0.15)
 
     # Creating instances of training, test and development set
     train_set = CFEVERERTrainDataset(train_claims, evidences)
@@ -526,13 +528,13 @@ def er_pipeline(train_claims, dev_claims, evidences):
     dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
     # First phrase: pre-train the model on all positive claim-evidence pairs and same number of random negative pairs
-    train_evi_retrival(net_er, loss_criterion, opti_er, train_loader, dev_loader, train_set, dev_claims, gpu, num_epoch_pre, grad_step_period_pre)
+    train_evi_retrival(net_er, loss_criterion, opti_er_pre, train_loader, dev_loader, train_set, dev_claims, gpu, num_epoch_pre, grad_step_period_pre)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))  # load the best model
     claim_hard_negative_evidences = hnm(net_er, train_claims, evidences, gpu)
     # claim_hard_negative_evidences = json.load(open(claim_hard_negatives_filename, 'r'))
 
-    train_evi_retrival(net_er, loss_criterion, opti_er, train_loader, dev_loader, train_set, dev_claims, gpu, num_epoch_post, grad_step_period_hne, claim_hard_negative_evidences=claim_hard_negative_evidences)
+    train_evi_retrival(net_er, loss_criterion, opti_er_hne, train_loader, dev_loader, train_set, dev_claims, gpu, num_epoch_post, grad_step_period_hne, claim_hard_negative_evidences=claim_hard_negative_evidences)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))
     return net_er
