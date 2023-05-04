@@ -222,6 +222,13 @@ def predict_pairs(net, dataloader, gpu):
 
 
 def decide_claim_labels(net, dataloader, gpu):
+    """
+    This function decides the final label for each claim
+    based on the designed rules.
+
+    Current Rule: Majority voting.
+    """
+        
     claim_evidence_labels = predict_pairs(net, dataloader, gpu)
     claim_labels = {}
 
