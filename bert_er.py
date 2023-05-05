@@ -29,7 +29,7 @@ claim_hard_negatives_filename = path_prefix + 'claim-hard-negative-evidences.jso
 # --------------Evidence Retrival--------------
 d_bert_base = 768
 gpu = 0
-input_seq_max_len = 256
+input_seq_max_len = 384
 train_sample_ratio = 1
 pre_select_evidence_num = 1000
 loader_batch_size = 24
@@ -50,14 +50,13 @@ grad_step_period_hne = 2
 class CFEVERERTrainDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Train, for the Evidence Retrival task."""
 
-    def __init__(self, claims, evidences_, max_len=input_seq_max_len, sample_ratio=train_sample_ratio):
+    def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, sample_ratio=train_sample_ratio):
         self.data_set = unroll_train_claim_evidences(claims, evidences_, sample_ratio=sample_ratio)
         self.max_len = max_len
         self.claims = claims
         self.evidences = evidences_
         self.sample_ratio = sample_ratio
-
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.data_set)
@@ -85,13 +84,12 @@ class CFEVERERTrainDataset(Dataset):
 class CFEVERERTestDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Dev/Test, for the Evidence Retrival task."""
 
-    def __init__(self, claims, evidences_, max_len=input_seq_max_len, max_candidates=pre_select_evidence_num):
+    def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, max_candidates=pre_select_evidence_num):
         self.data_set = unroll_test_claim_evidences(claims, evidences_, max_candidates=max_candidates)
         self.max_len = max_len
         self.claims = claims
         self.evidences = evidences_
-
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.data_set)
@@ -280,7 +278,7 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         dev_st = time.time()
         print("Evaluating on the dev set... (This might take a while)")
         f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
-        print("\nEpoch {} complete in {} seconds!\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}".format(ep, time.time() - dev_st, f1, recall, precision))
+        print("\nEpoch {} completed! Evaluation on dev set took {} seconds.\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}".format(ep, time.time() - dev_st, f1, recall, precision))
         
         if f1 > best_f1:
             print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
@@ -397,14 +395,13 @@ class CFEVERERHNMDataset(Dataset):
     Note: This dataset only takes one claim instead of all like in the normal train
     dataset above. Because hard negative evidences are selected for a claim at a time.
     """
-    def __init__(self, claim, evidences_, max_len=input_seq_max_len):
+    def __init__(self, claim, evidences_, tokenizer, max_len=input_seq_max_len):
         self.data_set = [e for e in evidences_ if e not in claim['evidences']]  # get all negative samples
         self.max_len = max_len
         self.claim = claim
         self.evidences = evidences_
         self.target_hn_num = len(claim['evidences'])  # number of hard negative evidences to be selected
-
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.data_set)
@@ -432,9 +429,10 @@ def hnm(net, train_claims, evidences_, gpu, hnm_threshold=hnm_threshold, hnm_bat
     st = time.time()
 
     claim_hard_negative_evidences = defaultdict(list)  # store the hard negative evidences for each claim
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     
     for k, train_claim in enumerate(train_claims):  # for each claim in the training set
-        test_train_set = CFEVERERHNMDataset(train_claims[train_claim], evidences_)  # get the dataset containing the negative evi for the claim
+        test_train_set = CFEVERERHNMDataset(train_claims[train_claim], evidences_, tokenizer)  # get the dataset containing the negative evi for the claim
         test_train_loader = DataLoader(test_train_set, batch_size=hnm_batch_size, num_workers=loader_worker_num)
 
         with torch.no_grad():  # suspend grad track, save time and memory
@@ -492,10 +490,11 @@ def er_pipeline(train_claims, dev_claims, evidences):
     loss_criterion = nn.BCEWithLogitsLoss()
     opti_er_pre = optim.Adam(net_er.parameters(), lr=opti_lr_er_pre)
     opti_er_hne = AdamW(net_er.parameters(), lr=opti_lr_er_hne, weight_decay=0.15)
+    bert_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     # Creating instances of training, test and development set
-    train_set = CFEVERERTrainDataset(train_claims, evidences)
-    dev_set = CFEVERERTestDataset(dev_claims, evidences)
+    train_set = CFEVERERTrainDataset(train_claims, evidences, bert_tokenizer)
+    dev_set = CFEVERERTestDataset(dev_claims, evidences, bert_tokenizer)
 
     #Creating intsances of training, test and development dataloaders
     train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
