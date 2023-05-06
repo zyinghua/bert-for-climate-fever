@@ -235,11 +235,13 @@ class CFEVERERClassifier(nn.Module):
 
 def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps, grad_step_period, claim_hard_negative_evidences=None):
     best_f1 = 0
+    mean_losses = []
     
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
         st = time.time()
         opti.zero_grad()
+        count = 0
         
         for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
             # Extracting the tokens ids, attention masks and token type ids
@@ -250,6 +252,8 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
 
             # Computing loss
             loss = loss_criterion(logits.squeeze(-1), labels.float())
+            mean_losses[ep] += loss.item()
+            count += 1
 
             # Backpropagating the gradients, account for gradients
             loss.backward()
@@ -266,6 +270,8 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
                 print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
                 st = time.time()
         
+        mean_losses[ep] /= count
+
         print("\nReseting training data...")
         if claim_hard_negative_evidences is not None:
             train_set.reset_data_hne(claim_hard_negative_evidences)
@@ -286,6 +292,8 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
             torch.save(net.state_dict(), er_model_params_filename)
         else:
             print()
+    
+    return mean_losses
 
 
 def get_accuracy_from_logits(logits, labels):
