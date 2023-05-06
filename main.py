@@ -4,6 +4,7 @@ from bert_er import extract_er_result, predict_evi, er_pipeline, CFEVERERTestDat
 from bert_clc import extract_claim_evi_labels, decide_claim_labels, clc_pipeline, CFEVERLabelTestDataset
 from dataset_loader import load_data
 from torch.utils.data import DataLoader
+from transformers import BertTokenizer
 import transformers
 
 # !pip install torch torchvision transformers
@@ -21,10 +22,11 @@ output_filename = path_prefix + 'test-claims-predictions.json'
 
 def CFEVER_main():
     train_claims, dev_claims, test_claims, evidences = load_data()
+    bert_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     net_er = er_pipeline(train_claims, dev_claims, evidences)
 
-    test_set_er = CFEVERERTestDataset(test_claims, evidences)
+    test_set_er = CFEVERERTestDataset(test_claims, evidences, bert_tokenizer)
     test_loader_er = DataLoader(test_set_er, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
     test_claims = extract_er_result(predict_evi(net_er, test_loader_er, gpu), test_claims)
