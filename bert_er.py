@@ -244,7 +244,7 @@ class CFEVERERClassifier(nn.Module):
 
 def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps, grad_step_period, claim_hard_negative_evidences=None):
     best_f1 = 0
-    mean_losses = []
+    mean_losses = [0] * max_eps
 
     if claim_hard_negative_evidences is None:
         scheduler = CosineAnnealingLR(opti, T_max=max_eps, eta_min=opti_lr_er_pre_s2)
@@ -293,8 +293,8 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_
         if (ep + 1) % 1 == 0:
             dev_st = time.time()
             print("Evaluating on the dev set... (This might take a while)")
-            f1, recall, precision = evaluate(net, dev_loader, dev_claims, loss_criterion, gpu)
-            print("\nEpoch {} completed! Evaluation on dev set took {} seconds.\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}".format(ep, time.time() - dev_st, f1, recall, precision))
+            f1, recall, precision, dev_loss = evaluate(net, dev_loader, dev_claims, loss_criterion, gpu)
+            print("\nEpoch {} completed! Evaluation on dev set took {} seconds.\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}; Dev Loss: {}".format(ep, time.time() - dev_st, f1, recall, precision, dev_loss))
             
             if f1 > best_f1:
                 print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
@@ -514,7 +514,7 @@ def er_pipeline(train_claims, dev_claims, evidences):
     net_er.cuda(gpu) # Enable gpu support for the model
 
     loss_criterion = nn.BCEWithLogitsLoss()
-    opti_er_pre = optim.Adam(net_er.parameters(), lr=opti_lr_er_pre)
+    opti_er_pre = optim.Adam(net_er.parameters(), lr=opti_lr_er_pre_s1)
     opti_er_hne = AdamW(net_er.parameters(), lr=opti_lr_er_hne, weight_decay=0.15)
     bert_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
@@ -527,13 +527,13 @@ def er_pipeline(train_claims, dev_claims, evidences):
     dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
     # First phrase: pre-train the model on all positive claim-evidence pairs and same number of random negative pairs
-    train_evi_retrival(net_er, loss_criterion, opti_er_pre, train_loader, dev_loader, train_set, dev_claims, gpu, num_epoch_pre, grad_step_period_pre)
+    train_evi_retrival(net_er, loss_criterion, opti_er_pre, train_loader, dev_loader, dev_claims, gpu, num_epoch_pre, grad_step_period_pre)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))  # load the best model
     claim_hard_negative_evidences = hnm(net_er, train_claims, evidences, gpu)
     # claim_hard_negative_evidences = json.load(open(claim_hard_negatives_filename, 'r'))
 
-    train_evi_retrival(net_er, loss_criterion, opti_er_hne, train_loader, dev_loader, train_set, dev_claims, gpu, num_epoch_post, grad_step_period_hne, claim_hard_negative_evidences=claim_hard_negative_evidences)
+    train_evi_retrival(net_er, loss_criterion, opti_er_hne, train_loader, dev_loader, dev_claims, gpu, num_epoch_post, grad_step_period_hne, claim_hard_negative_evidences=claim_hard_negative_evidences)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))
     return net_er
