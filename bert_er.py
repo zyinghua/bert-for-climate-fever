@@ -53,7 +53,7 @@ class CFEVERERTrainDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Train, for the Evidence Retrival task."""
 
     def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, data_aug_scale=data_aug_scale):
-        self.data_set = unroll_train_claim_evidences(claims, evidences_, data_aug_scale=data_aug_scale)
+        self.data_set = unroll_train_claim_evidences(claims, evidences_, data_aug_scale)
         self.max_len = max_len
         self.claims = claims
         self.evidences = evidences_
@@ -242,7 +242,7 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps, grad_step_period, claim_hard_negative_evidences=None):
+def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps, grad_step_period, claim_hard_negative_evidences=None):
     best_f1 = 0
     mean_losses = []
 
@@ -293,7 +293,7 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         if (ep + 1) % 1 == 0:
             dev_st = time.time()
             print("Evaluating on the dev set... (This might take a while)")
-            f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
+            f1, recall, precision = evaluate(net, dev_loader, dev_claims, loss_criterion, gpu)
             print("\nEpoch {} completed! Evaluation on dev set took {} seconds.\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}".format(ep, time.time() - dev_st, f1, recall, precision))
             
             if f1 > best_f1:
