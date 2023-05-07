@@ -17,6 +17,7 @@ import time
 import copy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from main import path_prefix
 
 random.seed(42)
@@ -30,7 +31,7 @@ claim_hard_negatives_filename = path_prefix + 'claim-hard-negative-evidences.jso
 d_bert_base = 768
 gpu = 0
 input_seq_max_len = 384
-train_sample_ratio = 1
+data_aug_scale = 3
 pre_select_evidence_num = 1000
 loader_batch_size = 24
 loader_worker_num = 2
@@ -40,7 +41,8 @@ hnm_threshold = 0.7
 hnm_batch_size = 12
 evidence_selection_threshold = 0.9
 max_evi = 5
-opti_lr_er_pre = 2e-5
+opti_lr_er_pre_s1 = 1e-5
+opti_lr_er_pre_s2 = 1e-6
 opti_lr_er_hne = 2e-7
 grad_step_period_pre = 1
 grad_step_period_hne = 2
@@ -50,19 +52,19 @@ grad_step_period_hne = 2
 class CFEVERERTrainDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Train, for the Evidence Retrival task."""
 
-    def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, sample_ratio=train_sample_ratio):
-        self.data_set = unroll_train_claim_evidences(claims, evidences_, sample_ratio=sample_ratio)
+    def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, data_aug_scale=data_aug_scale):
+        self.data_set = unroll_train_claim_evidences(claims, evidences_, data_aug_scale=data_aug_scale)
         self.max_len = max_len
         self.claims = claims
         self.evidences = evidences_
-        self.sample_ratio = sample_ratio
+        self.data_aug_scale=data_aug_scale
         self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.data_set)
     
     def reset_data_random(self):
-        self.data_set = unroll_train_claim_evidences(self.claims, self.evidences, self.sample_ratio)
+        self.data_set = unroll_train_claim_evidences(self.claims, self.evidences, self.data_aug_scale)
 
     def reset_data_hne(self, claim_hard_negative_evidences):
         self.data_set = unroll_train_claim_evidences_with_hne(self.claims, self.evidences, claim_hard_negative_evidences)
@@ -108,7 +110,7 @@ class CFEVERERTestDataset(Dataset):
         return seq, attn_masks, segment_ids, claim_id, evidence_id
 
 
-def unroll_train_claim_evidences(claims, evidences_, sample_ratio):
+def unroll_train_claim_evidences(claims, evidences_, data_aug_scale):
     """
     This function aims to define the train evidences for each claim, 
     unroll them into pairs, and return a list of claim-evidence pairs
@@ -121,9 +123,11 @@ def unroll_train_claim_evidences(claims, evidences_, sample_ratio):
     st = time.time()
 
     train_claim_evidence_pairs = []
-    for claim in claims:
-        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], sample_ratio):
-            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
+
+    for i in range(data_aug_scale):
+        for claim in claims:
+            for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences']):
+                train_claim_evidence_pairs.append((claim, train_evidence_id, label))
 
     random.shuffle(train_claim_evidence_pairs)
     print(f"Finished unrolling train claim-evidence pairs in {time.time() - st} seconds.")
@@ -160,7 +164,7 @@ def unroll_test_claim_evidences(claims, evidences_, max_candidates):
     return test_claim_evidence_pairs
 
 
-def generate_train_evidence_samples(evidences_, claim_evidences, sample_ratio):
+def generate_train_evidence_samples(evidences_, claim_evidences, sample_ratio=1):
     """
     Generate training samples for each of the claims for the evidence retrieval task.
     :param evidences_: the full evidence set.
@@ -201,11 +205,13 @@ def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, 
 
 
 class CFEVERERClassifier(nn.Module):
-    def __init__(self):
+    def __init__(self, dropout_prob=0.1):
         super(CFEVERERClassifier, self).__init__()
 
         # Instantiating BERT model object
         self.bert = BertModel.from_pretrained('bert-base-uncased')
+
+        #self.dropout = nn.Dropout(dropout_prob)
 
         # Classification layer
         # input dimension is 768 because [CLS] embedding has a dimension of 768, if bert base is used
@@ -227,6 +233,9 @@ class CFEVERERClassifier(nn.Module):
         # Obtaining the representation of [CLS] head (the first token)
         cls_rep = cont_reps[:, 0]
 
+        # Apply dropout
+        #cls_rep = self.dropout(cls_rep)
+
         # Feeding cls_rep to the classifier layer
         logits = self.cls_layer(cls_rep)
 
@@ -236,6 +245,9 @@ class CFEVERERClassifier(nn.Module):
 def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, train_set, dev_claims, gpu, max_eps, grad_step_period, claim_hard_negative_evidences=None):
     best_f1 = 0
     mean_losses = []
+
+    if claim_hard_negative_evidences is None:
+        scheduler = CosineAnnealingLR(opti, T_max=max_eps, eta_min=opti_lr_er_pre_s2)
     
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
@@ -272,26 +284,24 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, trai
         
         mean_losses[ep] /= count
 
-        print("\nReseting training data...")
-        if claim_hard_negative_evidences is not None:
-            train_set.reset_data_hne(claim_hard_negative_evidences)
-        else:
-            train_set.reset_data_random()
-
-        train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
-        print(f"Training data reset!\n")
+        if claim_hard_negative_evidences is None:
+            scheduler.step()
         
-        dev_st = time.time()
-        print("Evaluating on the dev set... (This might take a while)")
-        f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
-        print("\nEpoch {} completed! Evaluation on dev set took {} seconds.\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}".format(ep, time.time() - dev_st, f1, recall, precision))
+        # if claim_hard_negative_evidences is None and ep == 2:  # slow down learning rate
+        #     opti.param_groups[0]["lr"] = opti_lr_er_pre_s2
         
-        if f1 > best_f1:
-            print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
-            best_f1 = f1
-            torch.save(net.state_dict(), er_model_params_filename)
-        else:
-            print()
+        if (ep + 1) % 1 == 0:
+            dev_st = time.time()
+            print("Evaluating on the dev set... (This might take a while)")
+            f1, recall, precision = evaluate(net, dev_loader, dev_claims, gpu)
+            print("\nEpoch {} completed! Evaluation on dev set took {} seconds.\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}".format(ep, time.time() - dev_st, f1, recall, precision))
+            
+            if f1 > best_f1:
+                print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
+                best_f1 = f1
+                torch.save(net.state_dict(), er_model_params_filename)
+            else:
+                print()
     
     return mean_losses
 
@@ -326,17 +336,25 @@ def select_evi_df(df, threshold, max_evidences):
 
     return df
 
-def predict_evi(net, dataloader, gpu, threshold=evidence_selection_threshold, max_evidences=max_evi):
+def predict_evi(net, dataloader, gpu, threshold=evidence_selection_threshold, max_evidences=max_evi, evaluate=False, evaluation_claims=None, loss_criterion=None):
     net.eval()
 
     claim_evidences = defaultdict(list)
     df = pd.DataFrame()
+    mean_loss = 0
 
     with torch.no_grad():  # suspend grad track, save time and memory
         for seq, attn_masks, segment_ids, claim_ids, evidence_ids in dataloader:
+            if evaluate and evaluation_claims is not None:
+                labels = torch.tensor([1 if evidence_ids[i] in evaluation_claims[claim_ids[i]]['evidences'] else 0 for i in range(len(claim_ids))])
+                labels = labels.cuda(gpu)
+
             seq, attn_masks, segment_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu)
             logits = net(seq, attn_masks, segment_ids)
             probs = get_probs_from_logits(logits)
+
+            if evaluate:
+                mean_loss += loss_criterion(logits.squeeze(-1), labels.float()).item()
             
             df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "evidence_ids": evidence_ids, "probs": probs.cpu()})], ignore_index=True)
 
@@ -349,14 +367,14 @@ def predict_evi(net, dataloader, gpu, threshold=evidence_selection_threshold, ma
 
         claim_evidences[claim_id].append(evidence_id)
     
-    return claim_evidences
+    return claim_evidences if not evaluate else (claim_evidences, mean_loss / len(dataloader))
 
 
-def evaluate(net, dataloader, dev_claims, gpu):
+def evaluate(net, dataloader, dev_claims, loss_criterion, gpu):
     """
     Used to evaluate the dev set performance of the model.
     """
-    claim_evidences = predict_evi(net, dataloader, gpu)
+    claim_evidences, loss = predict_evi(net, dataloader, gpu, evaluate=True, evaluation_claims=dev_claims, loss_criterion=loss_criterion)
 
     fscores, recalls, precisions = [], [], []
 
@@ -374,7 +392,7 @@ def evaluate(net, dataloader, dev_claims, gpu):
     mean_recall = np.mean(recalls if len(recalls) > 0 else [0.0])
     mean_precision = np.mean(precisions if len(precisions) > 0 else [0.0])
 
-    return mean_f, mean_recall, mean_precision  # F1 Score, recall, precision
+    return mean_f, mean_recall, mean_precision, loss  # F1 Score, recall, precision, loss
 
 
 def extract_er_result(claim_evidences, claims, filename=er_result_filename):
@@ -472,7 +490,7 @@ def hnm(net, train_claims, evidences_, gpu, hnm_threshold=hnm_threshold, hnm_bat
     return claim_hard_negative_evidences
 
 
-def unroll_train_claim_evidences_with_hne(claims, evidences_, claim_hard_negative_evidences, hne_sample_ratio=0.5, sample_ratio=1):
+def unroll_train_claim_evidences_with_hne(claims, evidences_, claim_hard_negative_evidences, hne_sample_ratio=0.5):
     st = time.time()
 
     train_claim_evidence_pairs = []
@@ -524,3 +542,7 @@ def er_pipeline(train_claims, dev_claims, evidences):
 
 if __name__ == '__main__':
     pass
+    # 2e-7 with ep = 13, F1s: [0.20268501339929915, 0.2002319109461967, 0.19967532467532473, 0.20389610389610394, 
+    # 0.20436507936507942, 0.20454545454545459, 0.20310245310245312, 0.20625644197072773， 0.2100082457225315，0.2116316223459081， 0.2177076891362606， 0.21554318697175848, 0.2126211090496805]
+
+    # 
