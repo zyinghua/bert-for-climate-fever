@@ -234,20 +234,27 @@ def decide_claim_labels(net, dataloader, gpu):
     claim_evidence_labels = predict_pairs(net, dataloader, gpu)
     claim_labels = {}
 
-    # for claim_id in claim_evidence_labels:
-    #     if len(set(claim_evidence_labels[claim_id])) == 1:
-    #         claim_labels[claim_id] = label_mapper_itol[claim_evidence_labels[claim_id][0]]
-    #     elif len(set(claim_evidence_labels[claim_id])) == 2:
-    #         if label_mapper_ltoi['NOT_ENOUGH_INFO'] in claim_evidence_labels[claim_id]:
-    #             claim_labels[claim_id] = label_mapper_itol[(set(claim_evidence_labels[claim_id]) - {label_mapper_ltoi['NOT_ENOUGH_INFO']}).pop()]  # label as the other one: supports/refutes
-    #         else:
-    #             claim_labels[claim_id] = "DISPUTED"
-    #     else:  # len(set(claim_evidence_labels[claim_id])) == 3
-    #         claim_labels[claim_id] = "DISPUTED"
-
     for claim_id in claim_evidence_labels:
         claim_labels[claim_id] = label_mapper_itol[Counter(claim_evidence_labels[claim_id]).most_common(1)[0][0]]  # label as the most common one - majority voting
     
+    return claim_labels
+
+
+def decide_claim_labels_rule_aggregation(net, dataloader, gpu):
+    claim_evidence_labels = predict_pairs(net, dataloader, gpu)
+    claim_labels = {}
+
+    for claim_id in claim_evidence_labels:
+        if len(set(claim_evidence_labels[claim_id])) == 1:
+            claim_labels[claim_id] = label_mapper_itol[claim_evidence_labels[claim_id][0]]
+        elif len(set(claim_evidence_labels[claim_id])) == 2:
+            if label_mapper_ltoi['NOT_ENOUGH_INFO'] in claim_evidence_labels[claim_id]:
+                claim_labels[claim_id] = label_mapper_itol[(set(claim_evidence_labels[claim_id]) - {label_mapper_ltoi['NOT_ENOUGH_INFO']}).pop()]  # label as the other one: supports/refutes
+            else:
+                claim_labels[claim_id] = "DISPUTED"
+        else:  # len(set(claim_evidence_labels[claim_id])) == 3
+            claim_labels[claim_id] = "DISPUTED"
+
     return claim_labels
 
 
