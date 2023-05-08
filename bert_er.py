@@ -266,9 +266,10 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_
             loss = loss_criterion(logits.squeeze(-1), labels.float())
             mean_losses[ep] += loss.item()
             count += 1
-
+            
             # Backpropagating the gradients, account for gradients
-            loss.backward()
+            scaled_loss = loss / grad_step_period
+            scaled_loss.backward()
 
             if (i + 1) % grad_step_period == 0:
                 # Optimization step, apply the gradients
@@ -542,7 +543,3 @@ def er_pipeline(train_claims, dev_claims, evidences):
 
 if __name__ == '__main__':
     pass
-    # 2e-7 with ep = 13, F1s: [0.20268501339929915, 0.2002319109461967, 0.19967532467532473, 0.20389610389610394, 
-    # 0.20436507936507942, 0.20454545454545459, 0.20310245310245312, 0.20625644197072773， 0.2100082457225315，0.2116316223459081， 0.2177076891362606， 0.21554318697175848, 0.2126211090496805]
-
-    # 
