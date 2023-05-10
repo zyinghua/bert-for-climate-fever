@@ -200,7 +200,13 @@ def get_predictions_from_logits(logits):
     return predicted_classes.squeeze()
 
 
-def predict_pairs(net, dataloader, gpu):
+def get_probs_preds_from_logits(logits):
+    probs = F.softmax(logits, dim=-1)
+    predicted_probs, predicted_classes = torch.max(probs, dim=1)
+    return predicted_probs.squeeze(), predicted_classes.squeeze()
+
+
+def predict_pairs(net, dataloader, gpu, require_probs=False):
     net.eval()
 
     claim_evidence_labels = defaultdict(list)
@@ -210,17 +216,48 @@ def predict_pairs(net, dataloader, gpu):
         for seq, attn_masks, segment_ids, claim_ids in dataloader:
             seq, attn_masks, segment_ids = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu)
             logits = net(seq, attn_masks, segment_ids)
-            preds = get_predictions_from_logits(logits)
 
-            df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "preds": preds.cpu()})], ignore_index=True)
+            if require_probs:
+                probs, preds = get_probs_preds_from_logits(logits)
+                df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "probs": probs.cpu(), "preds": preds.cpu()})], ignore_index=True)
+            else:
+                preds = get_predictions_from_logits(logits)
+                df = pd.concat([df, pd.DataFrame({"claim_ids": claim_ids, "preds": preds.cpu()})], ignore_index=True)
 
     for _, row in df.iterrows():
         claim_id = row['claim_ids']
         label = row['preds']
 
-        claim_evidence_labels[claim_id].append(label)
+        if require_probs:
+            prob = row['probs']
+            claim_evidence_labels[claim_id].append((prob, label))
+        else:
+            claim_evidence_labels[claim_id].append(label)
     
     return claim_evidence_labels
+
+
+def decide_claim_labels_weighted_vote(net, dataloader, gpu):
+    """
+    This function decides the final label for each claim
+    based on the designed rules.
+
+    Current Rule: Weighted voting.
+    """
+    def elect_label(evi_prob_labels):
+        count = defaultdict(float)
+        for prob, label in evi_prob_labels:
+            count[label] += prob
+        
+        return max(count, key=count.get)
+
+    claim_evidence_labels = predict_pairs(net, dataloader, gpu, require_probs=True)
+    claim_labels = {}
+
+    for claim_id in claim_evidence_labels:
+        claim_labels[claim_id] = label_mapper_itol[elect_label(claim_evidence_labels[claim_id])]  # label as the most weighted one
+    
+    return claim_labels
 
 
 def decide_claim_labels_majority_vote(net, dataloader, gpu):
