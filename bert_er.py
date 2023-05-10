@@ -464,7 +464,9 @@ def hnm(net, train_claims, evidences_, tokenizer, gpu, hnm_threshold=hnm_thresho
         similarity = cosine_similarity(claim_tfidf, evidences_tfidf).squeeze()
     
         df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": similarity})
-        hnm_candidates = df[df['similarity'] > 0]["evidences"].tolist()  # only considers TF-IDF cosine similar Hard negatives
+        tfidf_similar_candidates = df[df['similarity'] > 0]["evidences"]
+        tfidf_non_similar_candidates = df[df['similarity'] == 0]["evidences"]
+        hnm_candidates = pd.concat([tfidf_similar_candidates, tfidf_non_similar_candidates]).tolist()  # get the candidates for hard negative evidences
 
         test_train_set = CFEVERERHNMDataset(train_claims[claim_id], hnm_candidates, evidences_, tokenizer)  # get the dataset containing the negative evi for the claim
         test_train_loader = DataLoader(test_train_set, batch_size=hnm_batch_size, num_workers=loader_worker_num)
