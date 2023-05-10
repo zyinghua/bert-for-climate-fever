@@ -7,7 +7,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from dataset_loader import load_data
 
-def tfidf_cos_er_baseline(claims, evidences, evidence_select_num=10):
+def tfidf_cos_er_baseline(claims, evidences, evidence_select_num=5):
     """
     Selects the K most cosine similar evidences based on TF-IDF.
     """
