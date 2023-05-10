@@ -41,4 +41,4 @@ def CFEVER_main():
 
 
 if __name__ == '__main__':
-    print('Start running the pipeline...')
+    pass
