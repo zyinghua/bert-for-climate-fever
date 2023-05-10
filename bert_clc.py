@@ -223,7 +223,7 @@ def predict_pairs(net, dataloader, gpu):
     return claim_evidence_labels
 
 
-def decide_claim_labels(net, dataloader, gpu):
+def decide_claim_labels_majority_vote(net, dataloader, gpu):
     """
     This function decides the final label for each claim
     based on the designed rules.
@@ -259,7 +259,7 @@ def decide_claim_labels_rule_aggregation(net, dataloader, gpu):
 
 
 def evaluate_dev(net, dataloader, dev_claims, gpu):
-    claim_labels = decide_claim_labels(net, dataloader, gpu)
+    claim_labels = decide_claim_labels_majority_vote(net, dataloader, gpu)
 
     correct_labels = 0
 
