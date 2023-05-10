@@ -31,7 +31,8 @@ claim_hard_negatives_filename = path_prefix + 'claim-hard-negative-evidences.jso
 d_bert_base = 768
 gpu = 0
 input_seq_max_len = 384
-data_aug_scale = 3
+er_pos_neg_sample_ratio = 5
+train_neg_cand_num = 5000
 pre_select_evidence_num = 1000
 loader_batch_size = 24
 loader_worker_num = 2
@@ -41,33 +42,30 @@ hnm_threshold = 0.7
 hnm_batch_size = 12
 evidence_selection_threshold = 0.9
 max_evi = 5
-opti_lr_er_pre_s1 = 1e-5
-opti_lr_er_pre_s2 = 1e-6
-opti_lr_er_hne = 2e-7
-grad_step_period_pre = 1
-grad_step_period_hne = 2
+opti_lr_er_pre = 2e-5
+opti_lr_er_hne = 4e-7
+grad_step_period_pre = 3
+grad_step_period_hne = 3
 # ----------------------------------------------
 
 
 class CFEVERERTrainDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Train, for the Evidence Retrival task."""
 
-    def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, data_aug_scale=data_aug_scale):
-        self.data_set = unroll_train_claim_evidences(claims, evidences_, data_aug_scale)
+    def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, sample_ratio=er_pos_neg_sample_ratio, train_neg_cand_num=train_neg_cand_num):
+        self.data_set = unroll_train_claim_evidences(claims, evidences_, sample_ratio=sample_ratio, train_neg_cand_num=train_neg_cand_num)
         self.max_len = max_len
         self.claims = claims
         self.evidences = evidences_
-        self.data_aug_scale=data_aug_scale
+        self.sample_ratio = sample_ratio
+        self.train_neg_cand_num = train_neg_cand_num
         self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.data_set)
-    
-    def reset_data_random(self):
-        self.data_set = unroll_train_claim_evidences(self.claims, self.evidences, self.data_aug_scale)
 
     def reset_data_hne(self, claim_hard_negative_evidences):
-        self.data_set = unroll_train_claim_evidences_with_hne(self.claims, self.evidences, claim_hard_negative_evidences)
+        self.data_set = unroll_train_claim_evidences_with_hne(self.claims, claim_hard_negative_evidences)
 
     def __getitem__(self, index):
         claim_id, evidence_id, label = self.data_set[index]
@@ -110,7 +108,7 @@ class CFEVERERTestDataset(Dataset):
         return seq, attn_masks, segment_ids, claim_id, evidence_id
 
 
-def unroll_train_claim_evidences(claims, evidences_, data_aug_scale):
+def unroll_train_claim_evidences(claims, evidences_, sample_ratio, train_neg_cand_num):
     """
     This function aims to define the train evidences for each claim, 
     unroll them into pairs, and return a list of claim-evidence pairs
@@ -122,12 +120,17 @@ def unroll_train_claim_evidences(claims, evidences_, data_aug_scale):
     """
     st = time.time()
 
+    vectorizer = TfidfVectorizer(stop_words='english')
+    vectorizer.fit(list(evidences_.values()) + [claims[c]["claim_text"] for c in claims])
+    evidences_tfidf = vectorizer.transform(evidences_.values())
+
     train_claim_evidence_pairs = []
 
-    for i in range(data_aug_scale):
-        for claim in claims:
-            for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences']):
-                train_claim_evidence_pairs.append((claim, train_evidence_id, label))
+    for claim in claims:
+        claim_tfidf = vectorizer.transform([claims[claim]['claim_text']])
+
+        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], claim_tfidf, evidences_tfidf, sample_ratio, train_neg_cand_num):
+            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
 
     random.shuffle(train_claim_evidence_pairs)
     print(f"Finished unrolling train claim-evidence pairs in {time.time() - st} seconds.")
@@ -164,7 +167,7 @@ def unroll_test_claim_evidences(claims, evidences_, max_candidates):
     return test_claim_evidence_pairs
 
 
-def generate_train_evidence_samples(evidences_, claim_evidences, sample_ratio=1):
+def generate_train_evidence_samples(evidences_, claim_evidences, claim_tfidf, evidences_tfidf, sample_ratio, train_neg_cand_num):
     """
     Generate training samples for each of the claims for the evidence retrieval task.
     :param evidences_: the full evidence set.
@@ -172,13 +175,17 @@ def generate_train_evidence_samples(evidences_, claim_evidences, sample_ratio=1)
     :param sample_ratio: the ratio of positive to negative samples: neg/pos
     :return: a list of evidence samples zipped with the corresponding labels. - (evi id, label)
     """
-        
+    similarity = cosine_similarity(claim_tfidf, evidences_tfidf).squeeze()
+    
+    df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": similarity}).sort_values(by=['similarity'], ascending=False)
+    train_neg_candidates = df.iloc[:train_neg_cand_num]["evidences"].tolist()
+    
     # Get positive samples
     samples = claim_evidences.copy()  # evidence ids
 
     # Get negative samples
     while len(samples) < math.ceil(len(claim_evidences) * (sample_ratio + 1)):
-        neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
+        neg_sample = train_neg_candidates[random.randint(0, len(train_neg_candidates) - 1)]  # random selection
         
         if neg_sample not in samples:
             samples.append(neg_sample)
@@ -205,13 +212,11 @@ def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, 
 
 
 class CFEVERERClassifier(nn.Module):
-    def __init__(self, dropout_prob=0.1):
+    def __init__(self):
         super(CFEVERERClassifier, self).__init__()
 
         # Instantiating BERT model object
         self.bert = BertModel.from_pretrained('bert-base-uncased')
-
-        #self.dropout = nn.Dropout(dropout_prob)
 
         # Classification layer
         # input dimension is 768 because [CLS] embedding has a dimension of 768, if bert base is used
@@ -233,27 +238,22 @@ class CFEVERERClassifier(nn.Module):
         # Obtaining the representation of [CLS] head (the first token)
         cls_rep = cont_reps[:, 0]
 
-        # Apply dropout
-        #cls_rep = self.dropout(cls_rep)
-
         # Feeding cls_rep to the classifier layer
         logits = self.cls_layer(cls_rep)
 
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps, grad_step_period, claim_hard_negative_evidences=None):
+def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps, grad_step_period):
     best_f1 = 0
     mean_losses = [0] * max_eps
-
-    if claim_hard_negative_evidences is None:
-        scheduler = CosineAnnealingLR(opti, T_max=max_eps, eta_min=opti_lr_er_pre_s2)
     
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
         st = time.time()
         opti.zero_grad()
         count = 0
+        train_acc = 0
         
         for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
             # Extracting the tokens ids, attention masks and token type ids
@@ -264,11 +264,14 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_
 
             # Computing loss
             loss = loss_criterion(logits.squeeze(-1), labels.float())
+
             mean_losses[ep] += loss.item()
             count += 1
-            
+            train_acc += get_accuracy_from_logits(logits, labels)
+
+            scaled_loss = loss / grad_step_period  # normalise loss, scale to larger batch size, as original batch size cannot be handled due to GPU limitation
+
             # Backpropagating the gradients, account for gradients
-            scaled_loss = loss / grad_step_period
             scaled_loss.backward()
 
             if (i + 1) % grad_step_period == 0:
@@ -279,17 +282,11 @@ def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_
                 opti.zero_grad()
 
             if i % 100 == 0:
-                acc = get_accuracy_from_logits(logits, labels)
-                print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
+                print("Iteration {} of epoch {} complete. Time taken (s): {}".format(i, ep, (time.time() - st)))
                 st = time.time()
         
         mean_losses[ep] /= count
-
-        if claim_hard_negative_evidences is None:
-            scheduler.step()
-        
-        # if claim_hard_negative_evidences is None and ep == 2:  # slow down learning rate
-        #     opti.param_groups[0]["lr"] = opti_lr_er_pre_s2
+        print(f"Epoch {ep} completed. Loss: {mean_losses[ep]}, Accuracy: {train_acc / count}.\n")
         
         if (ep + 1) % 1 == 0:
             dev_st = time.time()
@@ -422,12 +419,12 @@ class CFEVERERHNMDataset(Dataset):
     Note: This dataset only takes one claim instead of all like in the normal train
     dataset above. Because hard negative evidences are selected for a claim at a time.
     """
-    def __init__(self, claim, evidences_, tokenizer, max_len=input_seq_max_len):
-        self.data_set = [e for e in evidences_ if e not in claim['evidences']]  # get all negative samples
+    def __init__(self, claim, hnm_evidence_ids, evidences_, tokenizer, max_len=input_seq_max_len):
+        self.data_set = [eid for eid in hnm_evidence_ids if eid not in claim['evidences']]  # get all negative samples
         self.max_len = max_len
         self.claim = claim
         self.evidences = evidences_
-        self.target_hn_num = len(claim['evidences'])  # number of hard negative evidences to be selected
+        self.target_hn_num = len(claim['evidences'])  # number of hard negative evidences to be selected at most
         self.tokenizer = tokenizer
 
     def __len__(self):
@@ -447,7 +444,7 @@ class CFEVERERHNMDataset(Dataset):
         return seq, attn_masks, segment_ids, evidence_id
 
 
-def hnm(net, train_claims, evidences_, gpu, hnm_threshold=hnm_threshold, hnm_batch_size=hnm_batch_size):
+def hnm(net, train_claims, evidences_, tokenizer, gpu, hnm_threshold=hnm_threshold, hnm_batch_size=hnm_batch_size):
     """
     This function aims to select the hard negative evidences for each claim.
     returns a dict of claim_id -> list of hard negative evidences.
@@ -456,10 +453,20 @@ def hnm(net, train_claims, evidences_, gpu, hnm_threshold=hnm_threshold, hnm_bat
     st = time.time()
 
     claim_hard_negative_evidences = defaultdict(list)  # store the hard negative evidences for each claim
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+    vectorizer = TfidfVectorizer(stop_words='english')
+    vectorizer.fit(list(evidences_.values()) + [train_claims[c]["claim_text"] for c in train_claims])
+    evidences_tfidf = vectorizer.transform(evidences_.values())
     
-    for k, train_claim in enumerate(train_claims):  # for each claim in the training set
-        test_train_set = CFEVERERHNMDataset(train_claims[train_claim], evidences_, tokenizer)  # get the dataset containing the negative evi for the claim
+    for k, claim_id in enumerate(train_claims):  # for each claim in the training set
+        claim_tfidf = vectorizer.transform([train_claims[claim_id]["claim_text"]])
+
+        similarity = cosine_similarity(claim_tfidf, evidences_tfidf).squeeze()
+    
+        df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": similarity})
+        hnm_candidates = df[df['similarity'] > 0]["evidences"].tolist()  # only considers TF-IDF cosine similar Hard negatives
+
+        test_train_set = CFEVERERHNMDataset(train_claims[claim_id], hnm_candidates, evidences_, tokenizer)  # get the dataset containing the negative evi for the claim
         test_train_loader = DataLoader(test_train_set, batch_size=hnm_batch_size, num_workers=loader_worker_num)
 
         with torch.no_grad():  # suspend grad track, save time and memory
@@ -471,13 +478,13 @@ def hnm(net, train_claims, evidences_, gpu, hnm_threshold=hnm_threshold, hnm_bat
                 indices = np.where(probs.cpu().numpy() > hnm_threshold)[0]  # get the indices of the hard negative evidences if any
                 i = 0
 
-                while len(claim_hard_negative_evidences[train_claim]) < test_train_set.target_hn_num and i < len(indices):
+                while len(claim_hard_negative_evidences[claim_id]) < test_train_set.target_hn_num and i < len(indices):
                     """While the number of hard negative evidences for the claim is less than the target number,
                     and there are still hard negative evidences in the indices, add the evidences to the list."""
-                    claim_hard_negative_evidences[train_claim].append(evidence_ids[indices[i]])
+                    claim_hard_negative_evidences[claim_id].append(evidence_ids[indices[i]])
                     i += 1
 
-                if len(claim_hard_negative_evidences[train_claim]) == test_train_set.target_hn_num:  # if the enough hard negatives, break
+                if len(claim_hard_negative_evidences[claim_id]) == test_train_set.target_hn_num:  # if the enough hard negatives, break
                     break
         
         if k % 50 == 0:
@@ -491,20 +498,17 @@ def hnm(net, train_claims, evidences_, gpu, hnm_threshold=hnm_threshold, hnm_bat
     return claim_hard_negative_evidences
 
 
-def unroll_train_claim_evidences_with_hne(claims, evidences_, claim_hard_negative_evidences, hne_sample_ratio=0.5):
-    st = time.time()
-
+def unroll_train_claim_evidences_with_hne(claims, claim_hard_negative_evidences):
     train_claim_evidence_pairs = []
 
     for claim in claims:
-        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], hne_sample_ratio):
-            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
+        for train_evidence_id in claims[claim]['evidences']:
+            train_claim_evidence_pairs.append((claim, train_evidence_id, 1))
 
         for train_evidence_id in claim_hard_negative_evidences[claim]:
             train_claim_evidence_pairs.append((claim, train_evidence_id, 0))
 
     random.shuffle(train_claim_evidence_pairs)
-    print(f"Finished unrolling train claim-evidence pairs with hne in {time.time() - st} seconds.")
 
     return train_claim_evidence_pairs
 
@@ -514,9 +518,10 @@ def er_pipeline(train_claims, dev_claims, evidences):
     net_er = CFEVERERClassifier()
     net_er.cuda(gpu) # Enable gpu support for the model
 
-    loss_criterion = nn.BCEWithLogitsLoss()
-    opti_er_pre = optim.Adam(net_er.parameters(), lr=opti_lr_er_pre_s1)
+    loss_criterion = nn.BCEWithLogitsLoss(weight=torch.tensor([er_pos_neg_sample_ratio])).cuda(gpu)
+    opti_er_pre = optim.Adam(net_er.parameters(), lr=opti_lr_er_pre)
     opti_er_hne = AdamW(net_er.parameters(), lr=opti_lr_er_hne, weight_decay=0.15)
+    
     bert_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     # Creating instances of training, test and development set
@@ -531,10 +536,13 @@ def er_pipeline(train_claims, dev_claims, evidences):
     train_evi_retrival(net_er, loss_criterion, opti_er_pre, train_loader, dev_loader, dev_claims, gpu, num_epoch_pre, grad_step_period_pre)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))  # load the best model
-    claim_hard_negative_evidences = hnm(net_er, train_claims, evidences, gpu)
+    claim_hard_negative_evidences = hnm(net_er, train_claims, evidences, bert_tokenizer, gpu)
     # claim_hard_negative_evidences = json.load(open(claim_hard_negatives_filename, 'r'))
 
-    train_evi_retrival(net_er, loss_criterion, opti_er_hne, train_loader, dev_loader, dev_claims, gpu, num_epoch_post, grad_step_period_hne, claim_hard_negative_evidences=claim_hard_negative_evidences)
+    train_set.reset_data_hne(claim_hard_negative_evidences)
+    train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
+
+    train_evi_retrival(net_er, loss_criterion, opti_er_hne, train_loader, dev_loader, dev_claims, gpu, num_epoch_post, grad_step_period_hne)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))
     return net_er
@@ -543,3 +551,16 @@ def er_pipeline(train_claims, dev_claims, evidences):
 
 if __name__ == '__main__':
     pass
+    # 2e-7 with ep = 13, F1s: [0.20268501339929915, 0.2002319109461967, 0.19967532467532473, 0.20389610389610394, 
+    # 0.20436507936507942, 0.20454545454545459, 0.20310245310245312, 0.20625644197072773， 0.2100082457225315，0.2116316223459081， 0.2177076891362606， 0.21554318697175848, 0.2126211090496805]
+
+    # 4e-7 with ep = 12, F1s: [0.2012420119562977, 0.19967532467532473, 0.20274170274170278, 0.20436507936507942, 0.20622036693465268, 0.20454545454545456, 0.21018862090290663, 0.21325499896928474,
+    # 0.2177076891362606, 0.21337868480725625, 0.21296639868068445, 0.20804473304473306, 0.20804473304473306, 0.20674603174603176, 0.20252525252525255]
+
+    # 6e-7 with ep = 12, F1s: [0.1983766233766234, 0.20274170274170278, 0.20454545454545459, 0.20625644197072773, 0.21018862090290663, 0.21554318697175848, 0.21521851164708306, 0.2129663986806844,
+    # 0.2096681096681097, 0.20544733044733046, 0.20567924139352714, 0.20438054009482584, 0.2000721500721501, 0.19967532467532473, 0.19967532467532473]
+
+    #8e-7 with ep = 15 F1s: [0.20111832611832617, 0.20436507936507942, 0.20422077922077927, 0.2116316223459081, 0.21368789940218513, 0.20971964543393115, 0.2068903318903319, 0.20382395382395385, 0.20438054009482584
+    # , 0.19862914862914866, 0.19505772005772007, 0.1937590187590188, 0.19520202020202024, 0.19520202020202024, 0.19520202020202024]
+
+    # 3 eps, da = 20, lr = 2e-5, bs = 240; train losses: [0.02095839323722005, 0.002466598234662235, 0.0017908066580048067], dev acc: [0.17981344052772624, 0.1478303442589157, 0.16137394351680065]
