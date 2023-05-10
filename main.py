@@ -36,7 +36,7 @@ def CFEVER_main():
 
     net_clc = bclc.clc_pipeline(train_claims, dev_claims, evidences)
 
-    claim_labels = bclc.decide_claim_labels(net_clc, test_loader_clc, gpu)
+    claim_labels = bclc.decide_claim_labels_majority_vote(net_clc, test_loader_clc, gpu)
     bclc.extract_claim_evi_labels(test_claims, claim_labels, output_filename)  # This function saves the final predictions to the destination file
 
 
