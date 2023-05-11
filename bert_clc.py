@@ -21,7 +21,7 @@ clc_model_params_filename = path_prefix + 'cfeverlabelcls.dat'
 # --------------Claim Label Classification--------------
 d_bert_base = 768
 gpu = 0
-input_seq_max_len = 256
+input_seq_max_len = 384
 loader_batch_size = 24
 loader_worker_num = 2
 num_epoch = 9
@@ -148,23 +148,30 @@ class CFEVERLabelClassifier(nn.Module):
 
 def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps=num_epoch):
     best_acc = 0
-    st = time.time()
+    mean_losses = [0] * max_eps
 
     for ep in range(max_eps):
         net.train()  # Good practice to set the mode of the model
+        st = time.time()
+        train_acc = 0
+        count = 0
         
-        for i, (seq, attn_masks, segment_ids, labels) in enumerate(train_loader):
+        for i, (b_seq, b_attn_masks, b_segment_ids, b_label) in enumerate(train_loader):
             # Reset/Clear gradients
             opti.zero_grad()
 
             # Extracting the tokens ids, attention masks and token type ids
-            seq, attn_masks, segment_ids, labels = seq.cuda(gpu), attn_masks.cuda(gpu), segment_ids.cuda(gpu), labels.cuda(gpu)
+            b_seq, b_attn_masks, b_segment_ids, b_label = b_seq.cuda(gpu), b_attn_masks.cuda(gpu), b_segment_ids.cuda(gpu), b_label.cuda(gpu)
 
             # Obtaining the logits from the model
-            logits = net(seq, attn_masks, segment_ids)
+            logits = net(b_seq, b_attn_masks, b_segment_ids)
 
             # Computing loss
-            loss = loss_criterion(logits, labels)
+            loss = loss_criterion(logits, b_label)
+
+            mean_losses[ep] += loss.item()
+            count += 1
+            train_acc += get_accuracy_from_logits(logits, b_label)
 
             # Backpropagating the gradients, account for gradients
             loss.backward()
@@ -173,9 +180,11 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
             opti.step()
 
             if i % 100 == 0:
-                acc = get_accuracy_from_logits(logits, labels)
-                print("Iteration {} of epoch {} complete. Loss: {}; Accuracy: {}; Time taken (s): {}".format(i, ep, loss.item(), acc, (time.time() - st)))
+                print("Iteration {} of epoch {} complete. Time taken (s): {}".format(i, ep, (time.time() - st)))
                 st = time.time()
+        
+        mean_losses[ep] /= count
+        print(f"Epoch {ep} completed. Loss: {mean_losses[ep]}, Accuracy: {train_acc / count}.\n")
 
         dev_acc = evaluate_dev(net, dev_loader, dev_claims, gpu)
         print("\nEpoch {} complete! Development Accuracy on dev claim labels: {}.".format(ep, dev_acc))
