@@ -419,8 +419,8 @@ class CFEVERERHNMDataset(Dataset):
     Note: This dataset only takes one claim instead of all like in the normal train
     dataset above. Because hard negative evidences are selected for a claim at a time.
     """
-    def __init__(self, claim, evidences_, tokenizer, max_len=input_seq_max_len):
-        self.data_set = [e for e in evidences_ if e not in claim['evidences']]  # get all negative samples
+    def __init__(self, claim, hnm_evidence_ids, evidences_, tokenizer, max_len=input_seq_max_len):
+        self.data_set = [eid for eid in hnm_evidence_ids if eid not in claim['evidences']]  # get all negative samples
         self.max_len = max_len
         self.claim = claim
         self.evidences = evidences_
@@ -442,7 +442,7 @@ class CFEVERERHNMDataset(Dataset):
                 'attention_mask'].squeeze(0), claim_evidence_in_tokens['token_type_ids'].squeeze(0)
     
         return seq, attn_masks, segment_ids, evidence_id
-    
+
 
 def hnm(net, train_claims, evidences_, tokenizer, gpu, hnm_threshold=hnm_threshold, hnm_batch_size=hnm_batch_size):
     """
@@ -453,9 +453,22 @@ def hnm(net, train_claims, evidences_, tokenizer, gpu, hnm_threshold=hnm_thresho
     st = time.time()
 
     claim_hard_negative_evidences = defaultdict(list)  # store the hard negative evidences for each claim
+
+    vectorizer = TfidfVectorizer(stop_words='english')
+    vectorizer.fit(list(evidences_.values()) + [train_claims[c]["claim_text"] for c in train_claims])
+    evidences_tfidf = vectorizer.transform(evidences_.values())
     
-    for k, train_claim in enumerate(train_claims):  # for each claim in the training set
-        test_train_set = CFEVERERHNMDataset(train_claims[train_claim], evidences_, tokenizer)  # get the dataset containing the negative evi for the claim
+    for k, claim_id in enumerate(train_claims):  # for each claim in the training set
+        claim_tfidf = vectorizer.transform([train_claims[claim_id]["claim_text"]])
+
+        similarity = cosine_similarity(claim_tfidf, evidences_tfidf).squeeze()
+    
+        df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": similarity})
+        tfidf_similar_candidates = df[df['similarity'] > 0]["evidences"]
+        tfidf_non_similar_candidates = df[df['similarity'] == 0]["evidences"]
+        hnm_candidates = pd.concat([tfidf_similar_candidates, tfidf_non_similar_candidates]).tolist()  # get the candidates for hard negative evidences
+
+        test_train_set = CFEVERERHNMDataset(train_claims[claim_id], hnm_candidates, evidences_, tokenizer)  # get the dataset containing the negative evi for the claim
         test_train_loader = DataLoader(test_train_set, batch_size=hnm_batch_size, num_workers=loader_worker_num)
 
         with torch.no_grad():  # suspend grad track, save time and memory
@@ -467,13 +480,13 @@ def hnm(net, train_claims, evidences_, tokenizer, gpu, hnm_threshold=hnm_thresho
                 indices = np.where(probs.cpu().numpy() > hnm_threshold)[0]  # get the indices of the hard negative evidences if any
                 i = 0
 
-                while len(claim_hard_negative_evidences[train_claim]) < test_train_set.target_hn_num and i < len(indices):
+                while len(claim_hard_negative_evidences[claim_id]) < test_train_set.target_hn_num and i < len(indices):
                     """While the number of hard negative evidences for the claim is less than the target number,
                     and there are still hard negative evidences in the indices, add the evidences to the list."""
-                    claim_hard_negative_evidences[train_claim].append(evidence_ids[indices[i]])
+                    claim_hard_negative_evidences[claim_id].append(evidence_ids[indices[i]])
                     i += 1
 
-                if len(claim_hard_negative_evidences[train_claim]) == test_train_set.target_hn_num:  # if the enough hard negatives, break
+                if len(claim_hard_negative_evidences[claim_id]) == test_train_set.target_hn_num:  # if the enough hard negatives, break
                     break
         
         if k % 50 == 0:
