@@ -2,7 +2,6 @@
 
 import json
 import pandas as pd
-import numpy as np
 import torch
 import torch.nn as nn
 from transformers import BertTokenizer
@@ -24,9 +23,8 @@ gpu = 0
 input_seq_max_len = 512
 loader_batch_size = 24
 loader_worker_num = 2
-num_epoch = 9
+num_epoch = 10
 max_evi_num = 5
-num_of_standalone_classes = 3
 num_of_classes = 4
 opti_lr_clc = 2e-5
 label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT_ENOUGH_INFO': 2, 'DISPUTED': 3}
@@ -195,9 +193,9 @@ def predict(net, dataloader, gpu):
     df = pd.DataFrame()
 
     with torch.no_grad():
-        for b_seqs, b_attn_masks, b_segment_ids, b_claim_id in dataloader:
-            b_seqs, b_attn_masks, b_segment_ids, = b_seqs.cuda(gpu), b_attn_masks.cuda(gpu), b_segment_ids.cuda(gpu)
-            logits = net(b_seqs, b_attn_masks, b_segment_ids)
+        for b_seq, b_attn_masks, b_segment_ids, b_claim_id in dataloader:
+            b_seq, b_attn_masks, b_segment_ids, = b_seq.cuda(gpu), b_attn_masks.cuda(gpu), b_segment_ids.cuda(gpu)
+            logits = net(b_seq, b_attn_masks, b_segment_ids)
 
             preds = get_predictions_from_logits(logits)
             df = pd.concat([df, pd.DataFrame({'claim_ids': b_claim_id, 'preds': preds.cpu()})], ignore_index=True)
