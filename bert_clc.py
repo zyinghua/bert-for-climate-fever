@@ -186,14 +186,20 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
         mean_losses[ep] /= count
         print(f"Epoch {ep} completed. Loss: {mean_losses[ep]}, Accuracy: {train_acc / count}.\n")
 
-        dev_acc = evaluate_dev(net, dev_loader, dev_claims, gpu)
-        print("\nEpoch {} complete! Development Accuracy on dev claim labels: {}.".format(ep, dev_acc))
-        if dev_acc > best_acc:
-            print("Best development accuracy improved from {} to {}, saving model...\n".format(best_acc, dev_acc))
-            best_acc = dev_acc
-            torch.save(net.state_dict(), clc_model_params_filename)
-        else:
-            print()
+        # Uncomment to evaluate on dev set after each epoch
+        # dev_acc = evaluate_dev(net, dev_loader, dev_claims, gpu)
+        # print("\nEpoch {} complete! Development Accuracy on dev claim labels: {}.".format(ep, dev_acc))
+        # if dev_acc > best_acc:
+        #     print("Best development accuracy improved from {} to {}, saving model...\n".format(best_acc, dev_acc))
+        #     best_acc = dev_acc
+        #     torch.save(net.state_dict(), clc_model_params_filename)
+        # else:
+        #     print()
+
+    torch.save(net.state_dict(), clc_model_params_filename)
+    print("\nTraining finished. Model saved.")
+    
+    return mean_losses
 
 
 def get_accuracy_from_logits(logits, labels):
