@@ -450,23 +450,22 @@ def hnm(net, train_claims, evidences_, tokenizer, gpu, hnm_threshold=hnm_thresho
     returns a dict of claim_id -> list of hard negative evidences.
     """
     net.eval()
-    st = time.time()
 
     claim_hard_negative_evidences = defaultdict(list)  # store the hard negative evidences for each claim
 
     vectorizer = TfidfVectorizer(stop_words='english')
     vectorizer.fit(list(evidences_.values()) + [train_claims[c]["claim_text"] for c in train_claims])
     evidences_tfidf = vectorizer.transform(evidences_.values())
+
+    st = time.time()
     
     for k, claim_id in enumerate(train_claims):  # for each claim in the training set
         claim_tfidf = vectorizer.transform([train_claims[claim_id]["claim_text"]])
 
         similarity = cosine_similarity(claim_tfidf, evidences_tfidf).squeeze()
     
-        df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": similarity})
-        tfidf_similar_candidates = df[df['similarity'] > 0]["evidences"]
-        tfidf_non_similar_candidates = df[df['similarity'] == 0]["evidences"]
-        hnm_candidates = pd.concat([tfidf_similar_candidates, tfidf_non_similar_candidates]).tolist()  # get the candidates for hard negative evidences
+        df = pd.DataFrame({"evidences": evidences_.keys(), "similarity": similarity}).sort_values(by=['similarity'], ascending=False)
+        hnm_candidates = df['evidences'].tolist()
 
         test_train_set = CFEVERERHNMDataset(train_claims[claim_id], hnm_candidates, evidences_, tokenizer)  # get the dataset containing the negative evi for the claim
         test_train_loader = DataLoader(test_train_set, batch_size=hnm_batch_size, num_workers=loader_worker_num)
