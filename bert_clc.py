@@ -24,7 +24,7 @@ gpu = 0
 input_seq_max_len = 384
 loader_batch_size = 24
 loader_worker_num = 2
-num_epoch = 9
+num_epoch = 10
 num_of_classes = 3
 opti_lr_clc = 2e-5
 label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT_ENOUGH_INFO': 2}
@@ -338,7 +338,7 @@ def clc_pipeline(train_claims, dev_claims, evidences):
             class_counts[train_claims[cid]['claim_label']] += len(train_claims[cid]['evidences'])
 
     class_weights = torch.tensor([(sum(class_counts.values()) / class_counts[c]) for c in label_mapper_ltoi.keys()])
-    loss_criterion = nn.CrossEntropyLoss(weight=class_weights).cuda(gpu)
+    loss_criterion = nn.CrossEntropyLoss()#weight=class_weights).cuda(gpu)
     opti_clc = optim.Adam(net_clc.parameters(), lr=opti_lr_clc)
 
     train_set = CFEVERLabelTrainDataset(train_claims, evidences)
