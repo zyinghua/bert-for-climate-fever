@@ -332,7 +332,11 @@ def clc_pipeline(train_claims, dev_claims, evidences):
     net_clc = CFEVERLabelClassifier()
     net_clc.cuda(gpu) # Enable gpu support for the model
 
-    class_counts = Counter([train_claims[claim]["claim_label"] for claim in train_claims])
+    class_counts = defaultdict(int)
+    for cid in train_claims:
+        if train_claims[cid]['claim_label'] != 'DISPUTED':
+            class_counts[train_claims[cid]['claim_label']] += len(train_claims[cid]['evidences'])
+
     class_weights = torch.tensor([(sum(class_counts.values()) / class_counts[c]) for c in label_mapper_ltoi.keys()])
     loss_criterion = nn.CrossEntropyLoss(weight=class_weights).cuda(gpu)
     opti_clc = optim.Adam(net_clc.parameters(), lr=opti_lr_clc)
