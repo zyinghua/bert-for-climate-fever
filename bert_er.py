@@ -126,11 +126,11 @@ def unroll_train_claim_evidences(claims, evidences_, sample_ratio, train_neg_can
 
     train_claim_evidence_pairs = []
 
-    for claim in claims:
-        claim_tfidf = vectorizer.transform([claims[claim]['claim_text']])
+    for cid in claims:
+        claim_tfidf = vectorizer.transform([claims[cid]['claim_text']])
 
-        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[claim]['evidences'], claim_tfidf, evidences_tfidf, sample_ratio, train_neg_cand_num):
-            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
+        for train_evidence_id, label in generate_train_evidence_samples(evidences_, claims[cid]['evidences'], claim_tfidf, evidences_tfidf, sample_ratio, train_neg_cand_num):
+            train_claim_evidence_pairs.append((cid, train_evidence_id, label))
 
     random.shuffle(train_claim_evidence_pairs)
     print(f"Finished unrolling train claim-evidence pairs in {time.time() - st} seconds.")
@@ -156,11 +156,11 @@ def unroll_test_claim_evidences(claims, evidences_, max_candidates):
     evidences_tfidf = vectorizer.transform(evidences_.values())
 
     test_claim_evidence_pairs = []
-    for claim in claims:
-        claim_tfidf = vectorizer.transform([claims[claim]['claim_text']])
+    for cid in claims:
+        claim_tfidf = vectorizer.transform([claims[cid]['claim_text']])
 
         for test_evidence_id in generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates):
-            test_claim_evidence_pairs.append((claim, test_evidence_id))
+            test_claim_evidence_pairs.append((cid, test_evidence_id))
 
     print(f"Finished unrolling test claim-evidence pairs in {time.time() - st} seconds.")
 
