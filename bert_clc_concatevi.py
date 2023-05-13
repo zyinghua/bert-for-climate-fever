@@ -3,6 +3,7 @@
 import json
 import pandas as pd
 import torch
+import random
 import torch.nn as nn
 from transformers import BertTokenizer
 from transformers import BertModel
@@ -47,7 +48,10 @@ class CFEVERLabelTrainDataset(Dataset):
 
     def __getitem__(self, index):
         claim = self.data_set[index]
-        evidences_combined = " ".join([self.evidences[eid] for eid in claim['evidences']])
+
+        claim_evidences = claim['evidences']
+        random.shuffle(claim_evidences)
+        evidences_combined = " ".join([self.evidences[eid] for eid in claim_evidences])
 
         # Preprocessing the text to be suitable for BERT
         claim_evidence_in_tokens = self.tokenizer.encode_plus(claim['claim_text'], evidences_combined, 
@@ -77,7 +81,9 @@ class CFEVERLabelTestDataset(Dataset):
     def __getitem__(self, index):
         claim_id, claim = self.data_set[index]
 
-        evidences_combined = " ".join([self.evidences[eid] for eid in claim['evidences']])
+        claim_evidences = claim['evidences']
+        random.shuffle(claim_evidences)
+        evidences_combined = " ".join([self.evidences[eid] for eid in claim_evidences])
 
         # Preprocessing the text to be suitable for BERT
         claim_evidence_in_tokens = self.tokenizer.encode_plus(claim['claim_text'], evidences_combined, 
@@ -171,6 +177,8 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
             torch.save(net.state_dict(), clc_model_params_filename)
         else:
             print()
+
+    return mean_losses
 
 
 def get_accuracy_from_logits(logits, labels):

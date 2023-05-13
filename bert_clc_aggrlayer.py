@@ -217,6 +217,8 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
         else:
             print()
 
+    return mean_losses
+
 
 def get_accuracy_from_logits(logits, labels):
     probs = F.softmax(logits, dim=-1)
