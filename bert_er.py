@@ -33,18 +33,18 @@ input_seq_max_len = 384
 er_pos_neg_sample_ratio = 5
 train_neg_cand_num = 5000
 pre_select_evidence_num = 1000
-loader_batch_size = 24
+loader_batch_size = 16
 loader_worker_num = 2
-num_epoch_pre = 5
+num_epoch_pre = 1
 num_epoch_post = 12
 hnm_threshold = 0.7
 hnm_batch_size = 12
 evidence_selection_threshold = 0.9
 max_evi = 5
 opti_lr_er_pre = 2e-5
-opti_lr_er_hne = 4e-7
-grad_step_period_pre = 3
-grad_step_period_hne = 3
+opti_lr_er_hne = 2e-7
+grad_step_period_pre = 4
+grad_step_period_hne = 4
 # ----------------------------------------------
 
 
