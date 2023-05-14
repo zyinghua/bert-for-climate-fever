@@ -1,4 +1,4 @@
-# This file contains all the code for the Evidence Retrival task. Data -> Training -> ER Model
+# This file contains all the code for the Evidence Retrieval task. Data -> Training -> ER Model
 
 import json
 import math
@@ -21,12 +21,12 @@ from main import path_prefix
 
 random.seed(42)
 evidence_key_prefix = 'evidence-'
-er_result_filename = path_prefix + "evidence-retrival-only-results.json"
+er_result_filename = path_prefix + "evidence-retrieval-only-results.json"
 er_model_params_filename = path_prefix + 'cfeverercls.dat'
 claim_hard_negatives_filename = path_prefix + 'claim-hard-negative-evidences.json'
 
 # ----------Hyperparameters of the entire pipeline----------
-# --------------Evidence Retrival--------------
+# --------------Evidence Retrieval--------------
 d_bert_base = 768
 gpu = 0
 input_seq_max_len = 384
@@ -49,7 +49,7 @@ grad_step_period_hne = 3
 
 
 class CFEVERERTrainDataset(Dataset):
-    """Climate Fact Extraction and Verification Dataset for Train, for the Evidence Retrival task."""
+    """Climate Fact Extraction and Verification Dataset for Train, for the Evidence Retrieval task."""
 
     def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, sample_ratio=er_pos_neg_sample_ratio, train_neg_cand_num=train_neg_cand_num):
         self.data_set = unroll_train_claim_evidences(claims, evidences_, sample_ratio=sample_ratio, train_neg_cand_num=train_neg_cand_num)
@@ -64,7 +64,7 @@ class CFEVERERTrainDataset(Dataset):
         return len(self.data_set)
 
     def reset_data_hne(self, claim_hard_negative_evidences):
-        self.data_set = unroll_train_claim_evidences_with_hne(self.claims, claim_hard_negative_evidences)
+        self.data_set = unroll_train_claim_evidences_with_hne(self.claims, self.evidences, claim_hard_negative_evidences)
 
     def __getitem__(self, index):
         claim_id, evidence_id, label = self.data_set[index]
@@ -81,7 +81,7 @@ class CFEVERERTrainDataset(Dataset):
 
 
 class CFEVERERTestDataset(Dataset):
-    """Climate Fact Extraction and Verification Dataset for Dev/Test, for the Evidence Retrival task."""
+    """Climate Fact Extraction and Verification Dataset for Dev/Test, for the Evidence Retrieval task."""
 
     def __init__(self, claims, evidences_, tokenizer, max_len=input_seq_max_len, max_candidates=pre_select_evidence_num):
         self.data_set = unroll_test_claim_evidences(claims, evidences_, max_candidates=max_candidates)
@@ -194,6 +194,30 @@ def generate_train_evidence_samples(evidences_, claim_evidences, claim_tfidf, ev
     return samples_with_labels
 
 
+def generate_random_train_evidence_samples(evidences_, claim_evidences, sample_ratio):
+    """
+    Generate training samples for each of the claims for the evidence retrieval task.
+    :param evidences_: the full evidence set.
+    :param claim_evidences: the ground truth evidence set for the claim. In the form of a list of evidence ids
+    :param sample_ratio: the ratio of positive to negative samples: neg/pos
+    :return: a list of evidence samples zipped with the corresponding labels. - (evi id, label)
+    """
+        
+    # Get positive samples
+    samples = claim_evidences.copy()  # evidence ids
+
+    # Get negative samples
+    while len(samples) < math.ceil(len(claim_evidences) * (sample_ratio + 1)):
+        neg_sample = evidence_key_prefix + str(random.randint(0, len(evidences_) - 1))  # random selection
+        
+        if neg_sample not in samples:
+            samples.append(neg_sample)
+
+    samples_with_labels = list(zip(samples, [1] * len(claim_evidences) + [0] * (len(samples) - len(claim_evidences))))
+
+    return samples_with_labels
+
+
 def generate_test_evidence_candidates(evidences_, evidences_tfidf, claim_tfidf, max_candidates):
     """
     :param evidences_: the full evidence set.
@@ -243,7 +267,7 @@ class CFEVERERClassifier(nn.Module):
         return logits
 
 
-def train_evi_retrival(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps, grad_step_period):
+def train_evi_retrieval(net, loss_criterion, opti, train_loader, dev_loader, dev_claims, gpu, max_eps, grad_step_period):
     best_f1 = 0
     mean_losses = [0] * max_eps
     
@@ -490,17 +514,20 @@ def hnm(net, train_claims, evidences_, tokenizer, gpu, hnm_threshold=hnm_thresho
     return claim_hard_negative_evidences
 
 
-def unroll_train_claim_evidences_with_hne(claims, claim_hard_negative_evidences):
+def unroll_train_claim_evidences_with_hne(claims, evidences_, claim_hard_negative_evidences, hne_sample_ratio=0.5):
+    st = time.time()
+
     train_claim_evidence_pairs = []
 
     for claim in claims:
-        for train_evidence_id in claims[claim]['evidences']:
-            train_claim_evidence_pairs.append((claim, train_evidence_id, 1))
+        for train_evidence_id, label in generate_random_train_evidence_samples(evidences_, claims[claim]['evidences'], hne_sample_ratio):
+            train_claim_evidence_pairs.append((claim, train_evidence_id, label))
 
         for train_evidence_id in claim_hard_negative_evidences[claim]:
             train_claim_evidence_pairs.append((claim, train_evidence_id, 0))
 
     random.shuffle(train_claim_evidence_pairs)
+    print(f"Finished unrolling train claim-evidence pairs with hne in {time.time() - st} seconds.")
 
     return train_claim_evidence_pairs
 
@@ -525,7 +552,7 @@ def er_pipeline(train_claims, dev_claims, evidences):
     dev_loader = DataLoader(dev_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
     # First phrase: pre-train the model on all positive claim-evidence pairs and same number of random negative pairs
-    train_evi_retrival(net_er, loss_criterion, opti_er_pre, train_loader, dev_loader, dev_claims, gpu, num_epoch_pre, grad_step_period_pre)
+    train_evi_retrieval(net_er, loss_criterion, opti_er_pre, train_loader, dev_loader, dev_claims, gpu, num_epoch_pre, grad_step_period_pre)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))  # load the best model
     claim_hard_negative_evidences = hnm(net_er, train_claims, evidences, bert_tokenizer, gpu)
@@ -534,7 +561,7 @@ def er_pipeline(train_claims, dev_claims, evidences):
     train_set.reset_data_hne(claim_hard_negative_evidences)
     train_loader = DataLoader(train_set, batch_size=loader_batch_size, num_workers=loader_worker_num)
 
-    train_evi_retrival(net_er, loss_criterion, opti_er_hne, train_loader, dev_loader, dev_claims, gpu, num_epoch_post, grad_step_period_hne)
+    train_evi_retrieval(net_er, loss_criterion, opti_er_hne, train_loader, dev_loader, dev_claims, gpu, num_epoch_post, grad_step_period_hne)
 
     net_er.load_state_dict(torch.load(er_model_params_filename))
     return net_er
@@ -543,21 +570,3 @@ def er_pipeline(train_claims, dev_claims, evidences):
 
 if __name__ == '__main__':
     pass
-    # 2e-7 with ep = 13, F1s: [0.20268501339929915, 0.2002319109461967, 0.19967532467532473, 0.20389610389610394, 
-    # 0.20436507936507942, 0.20454545454545459, 0.20310245310245312, 0.20625644197072773， 0.2100082457225315，0.2116316223459081， 0.2177076891362606， 0.21554318697175848, 0.2126211090496805]
-
-    # 4e-7 with ep = 12, F1s: [0.2012420119562977, 0.19967532467532473, 0.20274170274170278, 0.20436507936507942, 0.20622036693465268, 0.20454545454545456, 0.21018862090290663, 0.21325499896928474,
-    # 0.2177076891362606, 0.21337868480725625, 0.21296639868068445, 0.20804473304473306, 0.20804473304473306, 0.20674603174603176, 0.20252525252525255]
-
-    # 6e-7 with ep = 12, F1s: [0.1983766233766234, 0.20274170274170278, 0.20454545454545459, 0.20625644197072773, 0.21018862090290663, 0.21554318697175848, 0.21521851164708306, 0.2129663986806844,
-    # 0.2096681096681097, 0.20544733044733046, 0.20567924139352714, 0.20438054009482584, 0.2000721500721501, 0.19967532467532473, 0.19967532467532473]
-
-    #8e-7 with ep = 15 F1s: [0.20111832611832617, 0.20436507936507942, 0.20422077922077927, 0.2116316223459081, 0.21368789940218513, 0.20971964543393115, 0.2068903318903319, 0.20382395382395385, 0.20438054009482584
-    # , 0.19862914862914866, 0.19505772005772007, 0.1937590187590188, 0.19520202020202024, 0.19520202020202024, 0.19520202020202024]
-
-    # 3 eps, da = 20, lr = 2e-5, bs = 240; train losses: [0.02095839323722005, 0.002466598234662235, 0.0017908066580048067], dev acc: [0.17981344052772624, 0.1478303442589157, 0.16137394351680065]
-
-
-    # 1000 P1: [0.2179]
-    # 2000 P1: 
-    # 5000 P1: [0.2290661719233148, 0.2224438260152546, 0.21893939393939396, 0.21352298495155642]
