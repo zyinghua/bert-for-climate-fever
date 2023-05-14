@@ -22,10 +22,10 @@ clc_model_params_filename = path_prefix + 'cfeverlabelcls.dat'
 d_bert_base = 768
 gpu = 0
 input_seq_max_len = 384
-loader_batch_size = 24
+loader_batch_size = 16
 loader_worker_num = 2
 num_epoch = 9
-num_of_classes = 3
+num_of_classes = 4
 opti_lr_clc = 2e-5
 label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT_ENOUGH_INFO': 2}
 label_mapper_itol = {0: 'SUPPORTS', 1: 'REFUTES', 2: 'NOT_ENOUGH_INFO'}
@@ -186,18 +186,14 @@ def train_claim_cls(net, loss_criterion, opti, train_loader, dev_loader, dev_cla
         mean_losses[ep] /= count
         print(f"Epoch {ep} completed. Loss: {mean_losses[ep]}, Accuracy: {train_acc / count}.\n")
 
-        # Uncomment to evaluate on dev set after each epoch
-        # dev_acc = evaluate_dev(net, dev_loader, dev_claims, gpu)
-        # print("\nEpoch {} complete! Development Accuracy on dev claim labels: {}.".format(ep, dev_acc))
-        # if dev_acc > best_acc:
-        #     print("Best development accuracy improved from {} to {}, saving model...\n".format(best_acc, dev_acc))
-        #     best_acc = dev_acc
-        #     torch.save(net.state_dict(), clc_model_params_filename)
-        # else:
-        #     print()
-
-    torch.save(net.state_dict(), clc_model_params_filename)
-    print("\nTraining finished. Model saved.")
+        dev_acc = evaluate_dev(net, dev_loader, dev_claims, gpu)
+        print("\nEpoch {} complete! Development Accuracy on dev claim labels: {}.".format(ep, dev_acc))
+        if dev_acc > best_acc:
+            print("Best development accuracy improved from {} to {}, saving model...\n".format(best_acc, dev_acc))
+            best_acc = dev_acc
+            torch.save(net.state_dict(), clc_model_params_filename)
+        else:
+            print()
     
     return mean_losses
 
