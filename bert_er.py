@@ -311,22 +311,18 @@ def train_evi_retrieval(net, loss_criterion, opti, train_loader, dev_loader, dev
         mean_losses[ep] /= count
         print(f"Epoch {ep} completed. Loss: {mean_losses[ep]}, Accuracy: {train_acc / count}.\n")
         
-        # Uncomment only when (dev set not used for training) and (you want to validate each epoch)
-        # if (ep + 1) % 1 == 0:
-        #     dev_st = time.time()
-        #     print("Evaluating on the dev set... (This might take a while)")
-        #     f1, recall, precision, dev_loss = evaluate(net, dev_loader, dev_claims, loss_criterion, gpu)
-        #     print("\nEpoch {} completed! Evaluation on dev set took {} seconds.\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}; Dev Loss: {}".format(ep, time.time() - dev_st, f1, recall, precision, dev_loss))
+        if (ep + 1) % 1 == 0:
+            dev_st = time.time()
+            print("Evaluating on the dev set... (This might take a while)")
+            f1, recall, precision, dev_loss = evaluate(net, dev_loader, dev_claims, loss_criterion, gpu)
+            print("\nEpoch {} completed! Evaluation on dev set took {} seconds.\nDevelopment F1: {}; Development Recall: {}; Development Precision: {}; Dev Loss: {}".format(ep, time.time() - dev_st, f1, recall, precision, dev_loss))
             
-        #     if f1 > best_f1:
-        #         print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
-        #         best_f1 = f1
-        #         torch.save(net.state_dict(), er_model_params_filename)
-        #     else:
-        #         print()
-
-    torch.save(net.state_dict(), er_model_params_filename)
-    print("\nTraining finished. Model saved.")
+            if f1 > best_f1:
+                print("Best development f1 improved from {} to {}, saving model...\n".format(best_f1, f1))
+                best_f1 = f1
+                torch.save(net.state_dict(), er_model_params_filename)
+            else:
+                print()
     
     return mean_losses
 
