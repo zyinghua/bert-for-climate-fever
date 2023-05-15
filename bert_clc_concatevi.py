@@ -82,7 +82,7 @@ class CFEVERLabelTestDataset(Dataset):
         claim_id, claim = self.data_set[index]
 
         claim_evidences = claim['evidences']
-        random.shuffle(claim_evidences)
+        # random.shuffle(claim_evidences)
         evidences_combined = " ".join([self.evidences[eid] for eid in claim_evidences])
 
         # Preprocessing the text to be suitable for BERT
