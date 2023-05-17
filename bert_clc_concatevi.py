@@ -22,7 +22,7 @@ clc_model_params_filename = path_prefix + 'cfeverlabelcls.dat'
 d_bert_base = 768
 gpu = 0
 input_seq_max_len = 512
-loader_batch_size = 24
+loader_batch_size = 16
 loader_worker_num = 2
 num_epoch = 10
 max_evi_num = 5
@@ -31,6 +31,7 @@ opti_lr_clc = 2e-5
 label_mapper_ltoi = {'SUPPORTS': 0, 'REFUTES': 1, 'NOT_ENOUGH_INFO': 2, 'DISPUTED': 3}
 label_mapper_itol = {0: 'SUPPORTS', 1: 'REFUTES', 2: 'NOT_ENOUGH_INFO', 3: 'DISPUTED'}
 # ------------------------------------------------------
+
 
 class CFEVERLabelTrainDataset(Dataset):
     """Climate Fact Extraction and Verification Dataset for Training, for the Evidence Retrival task."""
