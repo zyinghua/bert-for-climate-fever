@@ -1,6 +1,4 @@
-Original Paper can be found via:
-<https://github.com/zyinghua/bert_for_climate_fever/blob/main/paper/A_BERT_based_model_for_Climate_Fact_Extraction_and_Claim_Verification.pdf>
-
+Original Paper can be found [here](https://github.com/zyinghua/bert_for_climate_fever/blob/main/paper/A_BERT_based_model_for_Climate_Fact_Extraction_and_Claim_Verification.pdf).
 # [Automated Fact Checking For Climate Science Claims] Implementation
 
 This file aims to provide instructions and guides to run the implementation code provided that
